@@ -467,19 +467,37 @@ fun MapPlaceholderScreen(
                             view.parent?.requestDisallowInterceptTouchEvent(false)
 
                             coroutineScope.launch {
-                                val polygonId = selectedPolygonId
-                                if (polygonId != null && db != null) {
-                                    val currentVerticesInMemory = savedPolygons
-                                        .find { it.first.id == polygonId }
-                                        ?.second
-                                        ?.sortedBy { it.vertexOrder }
-                                        ?: emptyList()
+                                if (isPolygonEditMode) {
+                                    val polygonId = selectedPolygonId
+                                    if (polygonId != null && db != null) {
+                                        val currentVerticesInMemory = savedPolygons
+                                            .find { it.first.id == polygonId }
+                                            ?.second
+                                            ?.sortedBy { it.vertexOrder }
+                                            ?: emptyList()
 
-                                    savedPolygons = persistPolygonVertices(
-                                        db = db,
-                                        farmId = farmId,
-                                        vertices = currentVerticesInMemory
-                                    )
+                                        savedPolygons = persistPolygonVertices(
+                                            db = db,
+                                            farmId = farmId,
+                                            vertices = currentVerticesInMemory
+                                        )
+                                    }
+                                } else if (isPolylineEditMode) {
+                                    val polylineId = selectedPolylineId
+                                    if (polylineId != null && db != null) {
+                                        val currentVerticesInMemory = savedPolylines
+                                            .find { it.first.id == polylineId }
+                                            ?.second
+                                            ?.sortedBy { it.vertexOrder }
+                                            ?: emptyList()
+
+                                        savedPolylines = persistPolylineVertices(
+                                            db = db,
+                                            farmId = farmId,
+                                            polylineId = polylineId,
+                                            vertices = currentVerticesInMemory
+                                        )
+                                    }
                                 }
 
                                 isDraggingVertex = false
@@ -1757,7 +1775,6 @@ fun MapPlaceholderScreen(
                             onClick = {
                                 isPolylineEditMode = !isPolylineEditMode
                                 isPolygonEditMode = false
-                                isPolylineEditMode = false
                                 selectedVertexId = null
                                 isDraggingVertex = false
 
