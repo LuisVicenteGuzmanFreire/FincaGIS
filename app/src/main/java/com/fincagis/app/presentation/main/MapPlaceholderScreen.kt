@@ -77,6 +77,7 @@ import android.view.MotionEvent
 import com.fincagis.app.presentation.main.map.addOrUpdateCapturedPoints
 import com.fincagis.app.presentation.main.map.addOrUpdateFarmMarker
 import com.fincagis.app.presentation.main.map.addOrUpdatePolygonVerticesLayer
+import com.fincagis.app.presentation.main.map.addOrUpdatePolylineVerticesLayer
 import com.fincagis.app.presentation.main.map.addOrUpdateSavedPolygons
 import com.fincagis.app.presentation.main.map.addOrUpdateTemporaryPolygonLine
 import com.fincagis.app.presentation.main.map.addOrUpdateTemporaryPolygonVertices
@@ -780,6 +781,24 @@ fun MapPlaceholderScreen(
                 style = style,
                 polylines = savedPolylines,
                 selectedPolylineId = selectedPolylineId
+            )
+        }
+    }
+
+    LaunchedEffect(selectedPolylineId, selectedVertexId, savedPolylines, mapLibreMap) {
+        mapLibreMap?.getStyle { style ->
+            val vertices = if (selectedPolylineId != null) {
+                savedPolylines
+                    .find { it.first.id == selectedPolylineId }
+                    ?.second ?: emptyList()
+            } else {
+                emptyList()
+            }
+
+            addOrUpdatePolylineVerticesLayer(
+                style = style,
+                vertices = vertices,
+                selectedVertexId = selectedVertexId
             )
         }
     }

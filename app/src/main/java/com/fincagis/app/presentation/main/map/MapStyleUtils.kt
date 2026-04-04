@@ -332,6 +332,50 @@ fun addOrUpdatePolygonVerticesLayer(
     }
 }
 
+fun addOrUpdatePolylineVerticesLayer(
+    style: Style,
+    vertices: List<PolylineVertexEntity>,
+    selectedVertexId: String?
+) {
+    val features = vertices.map { vertex ->
+        Feature.fromGeometry(
+            Point.fromLngLat(vertex.longitude, vertex.latitude)
+        ).also { feature ->
+            val isSelected = vertex.id == selectedVertexId
+
+            feature.addStringProperty(
+                "vertexColor",
+                if (isSelected) "#FF5252" else "#1E88E5"
+            )
+            feature.addNumberProperty(
+                "vertexRadius",
+                if (isSelected) 8.0 else 5.0
+            )
+        }
+    }
+
+    val featureCollection = FeatureCollection.fromFeatures(features)
+    val sourceId = "polyline-vertices-source"
+    val layerId = "polyline-vertices-layer"
+
+    val existingSource = style.getSource(sourceId) as? GeoJsonSource
+    if (existingSource != null) {
+        existingSource.setGeoJson(featureCollection)
+    } else {
+        style.addSource(GeoJsonSource(sourceId, featureCollection))
+    }
+
+    if (style.getLayer(layerId) == null) {
+        val layer = CircleLayer(layerId, sourceId).withProperties(
+            circleColor(Expression.get("vertexColor")),
+            circleRadius(Expression.get("vertexRadius")),
+            circleStrokeColor("#FFFFFF"),
+            circleStrokeWidth(1.5f)
+        )
+        style.addLayer(layer)
+    }
+}
+
 fun addOrUpdateTemporaryPolyline(
     style: Style,
     vertices: List<LatLng>
