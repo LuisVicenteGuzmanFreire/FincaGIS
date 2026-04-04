@@ -1,4 +1,4 @@
-package com.fincagis.app.presentation.main.map
+﻿package com.fincagis.app.presentation.main.map
 
 import com.fincagis.app.data.local.entity.MapPointEntity
 import com.fincagis.app.data.local.entity.PolygonEntity
@@ -77,19 +77,6 @@ fun resolveMapSelection(
             )
         }
 
-        tappedPolygon != null -> {
-            val vertices = savedPolygons
-                .find { it.first.id == tappedPolygon.id }
-                ?.second
-                ?: emptyList()
-
-            MapSelectionResult.PolygonSelected(
-                polygon = tappedPolygon,
-                vertices = vertices,
-                status = "Polígono seleccionado desde el mapa: ${tappedPolygon.name}"
-            )
-        }
-
         tappedPolyline != null -> {
             val vertices = savedPolylines
                 .find { it.first.id == tappedPolyline.id }
@@ -99,7 +86,20 @@ fun resolveMapSelection(
             MapSelectionResult.PolylineSelected(
                 polyline = tappedPolyline,
                 vertices = vertices,
-                status = "Línea seleccionada desde el mapa: ${tappedPolyline.name}"
+                status = "LÃ­nea seleccionada desde el mapa: ${tappedPolyline.name}"
+            )
+        }
+
+        tappedPolygon != null -> {
+            val vertices = savedPolygons
+                .find { it.first.id == tappedPolygon.id }
+                ?.second
+                ?: emptyList()
+
+            MapSelectionResult.PolygonSelected(
+                polygon = tappedPolygon,
+                vertices = vertices,
+                status = "PolÃ­gono seleccionado desde el mapa: ${tappedPolygon.name}"
             )
         }
 
