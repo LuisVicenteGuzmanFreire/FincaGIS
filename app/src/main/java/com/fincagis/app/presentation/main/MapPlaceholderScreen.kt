@@ -124,6 +124,7 @@ import com.fincagis.app.presentation.main.map.handlePolygonListSelection
 import com.fincagis.app.presentation.main.map.handlePolylineListSelection
 import com.fincagis.app.presentation.main.map.addOrUpdateSavedPolylines
 import com.fincagis.app.presentation.main.map.addOrUpdateTemporaryPolyline
+import com.fincagis.app.presentation.main.map.addOrUpdateTemporaryPolylineVertices
 import com.fincagis.app.presentation.main.map.buildNextPolylineName
 import com.fincagis.app.presentation.main.map.deletePolylineById
 import com.fincagis.app.presentation.main.map.savePolyline
@@ -758,34 +759,43 @@ fun MapPlaceholderScreen(
                     addOrUpdateCapturedPoints(
                         style = style,
                         points = capturedPoints,
-                        selectedPointId = selectedPointId
+                        selectedPointId = selectedPointId,
+                        isPointEditMode = isPointEditMode,
+                        isDraggingPoint = isDraggingPoint
                     )
 
                     addOrUpdateSavedPolygons(
                         style = style,
                         polygons = savedPolygons,
-                        selectedPolygonId = selectedPolygonId
+                        selectedPolygonId = selectedPolygonId,
+                        isPolygonEditMode = isPolygonEditMode
                     )
 
                     addOrUpdateTemporaryPolygonVertices(
                         style = style,
-                        vertices = polygonVertices
+                        vertices = if (isPolygonCaptureModeEnabled) polygonVertices else emptyList()
                     )
 
                     addOrUpdateTemporaryPolygonLine(
                         style = style,
-                        vertices = polygonVertices
+                        vertices = if (isPolygonCaptureModeEnabled) polygonVertices else emptyList()
                     )
 
                     addOrUpdateSavedPolylines(
                         style = style,
                         polylines = savedPolylines,
-                        selectedPolylineId = selectedPolylineId
+                        selectedPolylineId = selectedPolylineId,
+                        isPolylineEditMode = isPolylineEditMode
                     )
 
                     addOrUpdateTemporaryPolyline(
                         style = style,
-                        vertices = polylineVertices
+                        vertices = if (isPolylineCaptureModeEnabled) polylineVertices else emptyList()
+                    )
+
+                    addOrUpdateTemporaryPolylineVertices(
+                        style = style,
+                        vertices = if (isPolylineCaptureModeEnabled) polylineVertices else emptyList()
                     )
 
                     centerOnFarm(
@@ -974,20 +984,35 @@ fun MapPlaceholderScreen(
         }
     }
 
-    LaunchedEffect(capturedPoints, selectedPointId, mapLibreMap) {
+    LaunchedEffect(
+        capturedPoints,
+        selectedPointId,
+        isPointEditMode,
+        isDraggingPoint,
+        mapLibreMap
+    ) {
         mapLibreMap?.getStyle { style ->
             addOrUpdateCapturedPoints(
                 style = style,
                 points = capturedPoints,
-                selectedPointId = selectedPointId
+                selectedPointId = selectedPointId,
+                isPointEditMode = isPointEditMode,
+                isDraggingPoint = isDraggingPoint
             )
         }
     }
 
-    LaunchedEffect(selectedPolygonId, selectedVertexId, savedPolygons, mapLibreMap) {
+    LaunchedEffect(
+        selectedPolygonId,
+        selectedVertexId,
+        isPolygonCaptureModeEnabled,
+        isDraggingVertex,
+        savedPolygons,
+        mapLibreMap
+    ) {
         mapLibreMap?.getStyle { style ->
 
-            val vertices = if (selectedPolygonId != null) {
+            val vertices = if (!isPolygonCaptureModeEnabled && selectedPolygonId != null) {
                 savedPolygons
                     .find { it.first.id == selectedPolygonId }
                     ?.second ?: emptyList()
@@ -998,34 +1023,44 @@ fun MapPlaceholderScreen(
             addOrUpdatePolygonVerticesLayer(
                 style = style,
                 vertices = vertices,
-                selectedVertexId = selectedVertexId
+                selectedVertexId = selectedVertexId,
+                isDraggingVertex = isDraggingVertex
             )
         }
     }
 
-    LaunchedEffect(savedPolygons, selectedPolygonId, mapLibreMap) {
+    LaunchedEffect(savedPolygons, selectedPolygonId, isPolygonEditMode, mapLibreMap) {
         mapLibreMap?.getStyle { style ->
             addOrUpdateSavedPolygons(
                 style = style,
                 polygons = savedPolygons,
-                selectedPolygonId = selectedPolygonId
+                selectedPolygonId = selectedPolygonId,
+                isPolygonEditMode = isPolygonEditMode
             )
         }
     }
 
-    LaunchedEffect(savedPolylines, selectedPolylineId, mapLibreMap) {
+    LaunchedEffect(savedPolylines, selectedPolylineId, isPolylineEditMode, mapLibreMap) {
         mapLibreMap?.getStyle { style ->
             addOrUpdateSavedPolylines(
                 style = style,
                 polylines = savedPolylines,
-                selectedPolylineId = selectedPolylineId
+                selectedPolylineId = selectedPolylineId,
+                isPolylineEditMode = isPolylineEditMode
             )
         }
     }
 
-    LaunchedEffect(selectedPolylineId, selectedVertexId, savedPolylines, mapLibreMap) {
+    LaunchedEffect(
+        selectedPolylineId,
+        selectedVertexId,
+        isPolylineCaptureModeEnabled,
+        isDraggingVertex,
+        savedPolylines,
+        mapLibreMap
+    ) {
         mapLibreMap?.getStyle { style ->
-            val vertices = if (selectedPolylineId != null) {
+            val vertices = if (!isPolylineCaptureModeEnabled && selectedPolylineId != null) {
                 savedPolylines
                     .find { it.first.id == selectedPolylineId }
                     ?.second ?: emptyList()
@@ -1036,30 +1071,36 @@ fun MapPlaceholderScreen(
             addOrUpdatePolylineVerticesLayer(
                 style = style,
                 vertices = vertices,
-                selectedVertexId = selectedVertexId
+                selectedVertexId = selectedVertexId,
+                isDraggingVertex = isDraggingVertex
             )
         }
     }
 
-    LaunchedEffect(polygonVertices, mapLibreMap) {
+    LaunchedEffect(polygonVertices, isPolygonCaptureModeEnabled, mapLibreMap) {
         mapLibreMap?.getStyle { style ->
             addOrUpdateTemporaryPolygonVertices(
                 style = style,
-                vertices = polygonVertices
+                vertices = if (isPolygonCaptureModeEnabled) polygonVertices else emptyList()
             )
 
             addOrUpdateTemporaryPolygonLine(
                 style = style,
-                vertices = polygonVertices
+                vertices = if (isPolygonCaptureModeEnabled) polygonVertices else emptyList()
             )
         }
     }
 
-    LaunchedEffect(polylineVertices, mapLibreMap) {
+    LaunchedEffect(polylineVertices, isPolylineCaptureModeEnabled, mapLibreMap) {
         mapLibreMap?.getStyle { style ->
             addOrUpdateTemporaryPolyline(
                 style = style,
-                vertices = polylineVertices
+                vertices = if (isPolylineCaptureModeEnabled) polylineVertices else emptyList()
+            )
+
+            addOrUpdateTemporaryPolylineVertices(
+                style = style,
+                vertices = if (isPolylineCaptureModeEnabled) polylineVertices else emptyList()
             )
         }
     }

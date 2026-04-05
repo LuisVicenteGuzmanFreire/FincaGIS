@@ -17,6 +17,7 @@ import org.maplibre.android.style.layers.PropertyFactory.circleStrokeWidth
 import org.maplibre.android.style.layers.PropertyFactory.fillColor
 import org.maplibre.android.style.layers.PropertyFactory.fillOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineColor
+import org.maplibre.android.style.layers.PropertyFactory.lineOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineWidth
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.android.maps.Style
@@ -105,21 +106,50 @@ fun addOrUpdateUserMarker(
 fun addOrUpdateCapturedPoints(
     style: Style,
     points: List<MapPointEntity>,
-    selectedPointId: String?
+    selectedPointId: String?,
+    isPointEditMode: Boolean,
+    isDraggingPoint: Boolean
 ) {
     val features = points.map { point ->
         val isSelected = point.id == selectedPointId
+        val isSelectedEditing = isSelected && isPointEditMode
+        val isSelectedDragging = isSelectedEditing && isDraggingPoint
         val baseColor = getPointColorByCategory(point.category)
 
         Feature.fromGeometry(
             Point.fromLngLat(point.longitude, point.latitude)
         ).also { feature ->
             feature.addStringProperty("pointColor", baseColor)
-            feature.addNumberProperty("pointRadius", if (isSelected) 10 else 7)
-            feature.addNumberProperty("pointStrokeWidth", if (isSelected) 3 else 2)
+            feature.addNumberProperty(
+                "pointRadius",
+                when {
+                    isSelectedDragging -> 14
+                    isSelectedEditing -> 12
+                    isSelected -> 10
+                    else -> 7
+                }
+            )
+            feature.addNumberProperty(
+                "pointStrokeWidth",
+                when {
+                    isSelectedDragging -> 5
+                    isSelectedEditing -> 4
+                    isSelected -> 3
+                    else -> 2
+                }
+            )
             feature.addStringProperty(
                 "pointStrokeColor",
-                if (isSelected) "#000000" else "#FFFFFF"
+                when {
+                    isSelectedDragging -> "#FFB300"
+                    isSelectedEditing -> "#FDD835"
+                    isSelected -> "#000000"
+                    else -> "#FFFFFF"
+                }
+            )
+            feature.addNumberProperty(
+                "pointOpacity",
+                if (isSelectedEditing) 1.0 else 0.92
             )
         }
     }
@@ -141,7 +171,7 @@ fun addOrUpdateCapturedPoints(
             circleRadius(Expression.get("pointRadius")),
             circleStrokeWidth(Expression.get("pointStrokeWidth")),
             circleStrokeColor(Expression.get("pointStrokeColor")),
-            circleOpacity(1f)
+            circleOpacity(Expression.get("pointOpacity"))
         )
         style.addLayer(layer)
     }
@@ -168,11 +198,11 @@ fun addOrUpdateTemporaryPolygonVertices(
 
     if (style.getLayer(layerId) == null) {
         val layer = CircleLayer(layerId, sourceId).withProperties(
-            circleRadius(6f),
-            circleColor("#6A1B9A"),
-            circleStrokeWidth(2f),
+            circleRadius(5.5f),
+            circleColor("#8E24AA"),
+            circleStrokeWidth(1.8f),
             circleStrokeColor("#FFFFFF"),
-            circleOpacity(1f)
+            circleOpacity(0.9f)
         )
         style.addLayer(layer)
     }
@@ -206,8 +236,9 @@ fun addOrUpdateTemporaryPolygonLine(
 
     if (style.getLayer(layerId) == null) {
         val layer = LineLayer(layerId, sourceId).withProperties(
-            lineColor("#6A1B9A"),
-            lineWidth(3f)
+            lineColor("#8E24AA"),
+            lineWidth(3f),
+            lineOpacity(0.9f)
         )
         style.addLayer(layer)
     }
@@ -216,7 +247,8 @@ fun addOrUpdateTemporaryPolygonLine(
 fun addOrUpdateSavedPolygons(
     style: Style,
     polygons: List<Pair<PolygonEntity, List<PolygonVertexEntity>>>,
-    selectedPolygonId: String?
+    selectedPolygonId: String?,
+    isPolygonEditMode: Boolean
 ) {
     val features = polygons.mapNotNull { (polygon, vertices) ->
         if (vertices.size < 3) {
@@ -235,25 +267,42 @@ fun addOrUpdateSavedPolygons(
             }
 
             val isSelected = polygon.id == selectedPolygonId
+            val isEditing = isSelected && isPolygonEditMode
 
             Feature.fromGeometry(
                 GeoJsonPolygon.fromLngLats(listOf(ring))
             ).also { feature ->
                 feature.addStringProperty(
                     "polygonFillColor",
-                    if (isSelected) "#AB47BC" else "#8E24AA"
+                    when {
+                        isEditing -> "#7B1FA2"
+                        isSelected -> "#AB47BC"
+                        else -> "#8E24AA"
+                    }
                 )
                 feature.addNumberProperty(
                     "polygonFillOpacity",
-                    if (isSelected) 0.35 else 0.20
+                    when {
+                        isEditing -> 0.45
+                        isSelected -> 0.34
+                        else -> 0.20
+                    }
                 )
                 feature.addStringProperty(
                     "polygonLineColor",
-                    if (isSelected) "#4A148C" else "#6A1B9A"
+                    when {
+                        isEditing -> "#311B92"
+                        isSelected -> "#4A148C"
+                        else -> "#6A1B9A"
+                    }
                 )
                 feature.addNumberProperty(
                     "polygonLineWidth",
-                    if (isSelected) 4.0 else 2.5
+                    when {
+                        isEditing -> 6.5
+                        isSelected -> 4.5
+                        else -> 2.5
+                    }
                 )
             }
         }
@@ -291,21 +340,31 @@ fun addOrUpdateSavedPolygons(
 fun addOrUpdatePolygonVerticesLayer(
     style: Style,
     vertices: List<PolygonVertexEntity>,
-    selectedVertexId: String?
+    selectedVertexId: String?,
+    isDraggingVertex: Boolean
 ) {
     val features = vertices.map { vertex ->
         Feature.fromGeometry(
             Point.fromLngLat(vertex.longitude, vertex.latitude)
         ).also { feature ->
             val isSelected = vertex.id == selectedVertexId
+            val isSelectedDragging = isSelected && isDraggingVertex
 
             feature.addStringProperty(
                 "vertexColor",
-                if (isSelected) "#FF5252" else "#1E88E5"
+                if (isSelected) "#E53935" else "#1E88E5"
             )
             feature.addNumberProperty(
                 "vertexRadius",
-                if (isSelected) 8.0 else 5.0
+                if (isSelectedDragging) 12.0 else if (isSelected) 10.0 else 5.5
+            )
+            feature.addStringProperty(
+                "vertexStrokeColor",
+                if (isSelectedDragging) "#FDD835" else "#FFFFFF"
+            )
+            feature.addNumberProperty(
+                "vertexStrokeWidth",
+                if (isSelectedDragging) 3.0 else if (isSelected) 2.4 else 1.5
             )
         }
     }
@@ -325,8 +384,8 @@ fun addOrUpdatePolygonVerticesLayer(
         val layer = CircleLayer(layerId, sourceId).withProperties(
             circleColor(Expression.get("vertexColor")),
             circleRadius(Expression.get("vertexRadius")),
-            circleStrokeColor("#FFFFFF"),
-            circleStrokeWidth(1.5f)
+            circleStrokeColor(Expression.get("vertexStrokeColor")),
+            circleStrokeWidth(Expression.get("vertexStrokeWidth"))
         )
         style.addLayer(layer)
     }
@@ -335,21 +394,31 @@ fun addOrUpdatePolygonVerticesLayer(
 fun addOrUpdatePolylineVerticesLayer(
     style: Style,
     vertices: List<PolylineVertexEntity>,
-    selectedVertexId: String?
+    selectedVertexId: String?,
+    isDraggingVertex: Boolean
 ) {
     val features = vertices.map { vertex ->
         Feature.fromGeometry(
             Point.fromLngLat(vertex.longitude, vertex.latitude)
         ).also { feature ->
             val isSelected = vertex.id == selectedVertexId
+            val isSelectedDragging = isSelected && isDraggingVertex
 
             feature.addStringProperty(
                 "vertexColor",
-                if (isSelected) "#FF5252" else "#1E88E5"
+                if (isSelected) "#E53935" else "#1E88E5"
             )
             feature.addNumberProperty(
                 "vertexRadius",
-                if (isSelected) 8.0 else 5.0
+                if (isSelectedDragging) 12.0 else if (isSelected) 10.0 else 5.5
+            )
+            feature.addStringProperty(
+                "vertexStrokeColor",
+                if (isSelectedDragging) "#FDD835" else "#FFFFFF"
+            )
+            feature.addNumberProperty(
+                "vertexStrokeWidth",
+                if (isSelectedDragging) 3.0 else if (isSelected) 2.4 else 1.5
             )
         }
     }
@@ -369,8 +438,8 @@ fun addOrUpdatePolylineVerticesLayer(
         val layer = CircleLayer(layerId, sourceId).withProperties(
             circleColor(Expression.get("vertexColor")),
             circleRadius(Expression.get("vertexRadius")),
-            circleStrokeColor("#FFFFFF"),
-            circleStrokeWidth(1.5f)
+            circleStrokeColor(Expression.get("vertexStrokeColor")),
+            circleStrokeWidth(Expression.get("vertexStrokeWidth"))
         )
         style.addLayer(layer)
     }
@@ -404,8 +473,40 @@ fun addOrUpdateTemporaryPolyline(
 
     if (style.getLayer(layerId) == null) {
         val layer = LineLayer(layerId, sourceId).withProperties(
-            lineColor("#00897B"),
-            lineWidth(4f)
+            lineColor("#00796B"),
+            lineWidth(3.5f),
+            lineOpacity(0.9f)
+        )
+        style.addLayer(layer)
+    }
+}
+
+fun addOrUpdateTemporaryPolylineVertices(
+    style: Style,
+    vertices: List<LatLng>
+) {
+    val features = vertices.map { vertex ->
+        Feature.fromGeometry(Point.fromLngLat(vertex.longitude, vertex.latitude))
+    }
+
+    val featureCollection = FeatureCollection.fromFeatures(features)
+    val sourceId = "temporary-polyline-vertices-source"
+    val layerId = "temporary-polyline-vertices-layer"
+
+    val existingSource = style.getSource(sourceId) as? GeoJsonSource
+    if (existingSource != null) {
+        existingSource.setGeoJson(featureCollection)
+    } else {
+        style.addSource(GeoJsonSource(sourceId, featureCollection))
+    }
+
+    if (style.getLayer(layerId) == null) {
+        val layer = CircleLayer(layerId, sourceId).withProperties(
+            circleRadius(5.5f),
+            circleColor("#00796B"),
+            circleStrokeWidth(1.8f),
+            circleStrokeColor("#FFFFFF"),
+            circleOpacity(0.9f)
         )
         style.addLayer(layer)
     }
@@ -414,7 +515,8 @@ fun addOrUpdateTemporaryPolyline(
 fun addOrUpdateSavedPolylines(
     style: Style,
     polylines: List<Pair<PolylineEntity, List<PolylineVertexEntity>>>,
-    selectedPolylineId: String?
+    selectedPolylineId: String?,
+    isPolylineEditMode: Boolean
 ) {
     val features = polylines.mapNotNull { (polyline, vertices) ->
         if (vertices.size < 2) {
@@ -425,17 +527,30 @@ fun addOrUpdateSavedPolylines(
                 .map { Point.fromLngLat(it.longitude, it.latitude) }
 
             val isSelected = polyline.id == selectedPolylineId
+            val isEditing = isSelected && isPolylineEditMode
 
             Feature.fromGeometry(
                 LineString.fromLngLats(points)
             ).also { feature ->
                 feature.addStringProperty(
                     "polylineColor",
-                    if (isSelected) "#004D40" else "#00897B"
+                    when {
+                        isEditing -> "#00695C"
+                        isSelected -> "#004D40"
+                        else -> "#00897B"
+                    }
                 )
                 feature.addNumberProperty(
                     "polylineWidth",
-                    if (isSelected) 6.0 else 4.0
+                    when {
+                        isEditing -> 8.5
+                        isSelected -> 6.0
+                        else -> 4.0
+                    }
+                )
+                feature.addNumberProperty(
+                    "polylineOpacity",
+                    if (isEditing) 1.0 else 0.95
                 )
             }
         }
@@ -455,7 +570,8 @@ fun addOrUpdateSavedPolylines(
     if (style.getLayer(layerId) == null) {
         val layer = LineLayer(layerId, sourceId).withProperties(
             lineColor(Expression.get("polylineColor")),
-            lineWidth(Expression.get("polylineWidth"))
+            lineWidth(Expression.get("polylineWidth")),
+            lineOpacity(Expression.get("polylineOpacity"))
         )
         style.addLayer(layer)
     }
