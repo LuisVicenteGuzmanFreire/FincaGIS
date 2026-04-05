@@ -44,6 +44,24 @@ interface MapPointDao {
         longitude: Double
     )
 
+    @Query("""
+        UPDATE map_points
+        SET photoPath = :photoPath,
+            photoName = :photoName,
+            photoCapturedAt = :photoCapturedAt,
+            photoMimeType = :photoMimeType,
+            photoSizeBytes = :photoSizeBytes
+        WHERE id = :pointId
+    """)
+    suspend fun updatePointPhotoReference(
+        pointId: String,
+        photoPath: String?,
+        photoName: String?,
+        photoCapturedAt: Long?,
+        photoMimeType: String?,
+        photoSizeBytes: Long?
+    )
+
     @Query("DELETE FROM map_points WHERE id = :pointId")
     suspend fun deleteById(pointId: String)
 

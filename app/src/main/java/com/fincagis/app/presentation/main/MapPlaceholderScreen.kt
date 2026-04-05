@@ -73,6 +73,11 @@ import com.fincagis.app.data.local.entity.PolylineEntity
 import com.fincagis.app.data.local.entity.PolylineVertexEntity
 import android.graphics.PointF
 import android.view.MotionEvent
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.core.content.FileProvider
+import java.io.File
 
 //Import Helpers map
 import com.fincagis.app.presentation.main.map.addOrUpdateCapturedPoints
@@ -109,6 +114,7 @@ import com.fincagis.app.presentation.main.map.centerOnSelectedPolyline
 import com.fincagis.app.presentation.main.map.centerOnUser
 import com.fincagis.app.presentation.main.map.createPointAtLocation
 import com.fincagis.app.presentation.main.map.deletePointById
+import com.fincagis.app.presentation.main.map.deletePointPhotoFile
 import com.fincagis.app.presentation.main.map.deletePolygonById
 import com.fincagis.app.presentation.main.map.deleteSelectedVertexFromPolygon
 import com.fincagis.app.presentation.main.map.getVerticesOfSelectedPolygon
@@ -134,6 +140,11 @@ import com.fincagis.app.presentation.main.map.persistPolylineVertices
 import com.fincagis.app.presentation.main.map.findNearestPolylineVertexToTap
 import com.fincagis.app.presentation.main.map.findNearestPolylineSegmentToTap
 import com.fincagis.app.presentation.main.map.insertVertexIntoPolylineSegment
+import com.fincagis.app.presentation.main.map.decodePointPhotoBitmapForPreview
+import com.fincagis.app.presentation.main.map.exportPointsToKmzFile
+import com.fincagis.app.presentation.main.map.preparePointPhotoFileForCapture
+import com.fincagis.app.presentation.main.map.PointPhotoFileInfo
+import com.fincagis.app.presentation.main.map.resolvePointPhotoMimeType
 
 
 @Composable
@@ -178,6 +189,9 @@ fun MapPlaceholderScreen(
     var pointNameInput by remember { mutableStateOf("") }
     var pointDescriptionInput by remember { mutableStateOf("") }
     var pointCategoryInput by remember { mutableStateOf("Muestreo") }
+    var pendingPointPhotoId by remember { mutableStateOf<String?>(null) }
+    var pendingPointPhotoFileInfo by remember { mutableStateOf<PointPhotoFileInfo?>(null) }
+    var showSelectedPointPhoto by remember { mutableStateOf(false) }
     var selectedPolygonNameInput by remember { mutableStateOf("") }
     var selectedPolygonDescriptionInput by remember { mutableStateOf("") }
     var selectedPolygonCategoryInput by remember { mutableStateOf("General") }
@@ -208,6 +222,20 @@ fun MapPlaceholderScreen(
 
     val selectedPolygon = uiState.savedPolygons.find { it.first.id == uiState.selectedPolygonId }
     val selectedPolyline = uiState.savedPolylines.find { it.first.id == uiState.selectedPolylineId }
+    val selectedPointPhotoBitmap = remember(selectedPoint?.photoPath) {
+        selectedPoint?.photoPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { decodePointPhotoBitmapForPreview(it) }
+    }
+
+    suspend fun clearPendingPointPhotoState(deletePendingFile: Boolean) {
+        val pendingInfo = pendingPointPhotoFileInfo
+        if (deletePendingFile && pendingInfo != null) {
+            deletePointPhotoFile(pendingInfo.absolutePath)
+        }
+        pendingPointPhotoFileInfo = null
+        pendingPointPhotoId = null
+    }
 
     LaunchedEffect(selectedPointId, capturedPoints) {
         val point = capturedPoints.find { it.id == selectedPointId }
@@ -220,6 +248,17 @@ fun MapPlaceholderScreen(
             pointNameInput = ""
             pointDescriptionInput = ""
             pointCategoryInput = "Muestreo"
+        }
+    }
+
+    LaunchedEffect(selectedPointId) {
+        showSelectedPointPhoto = false
+    }
+
+    LaunchedEffect(selectedPointId, pendingPointPhotoId) {
+        val pendingId = pendingPointPhotoId
+        if (pendingId != null && selectedPointId != pendingId) {
+            clearPendingPointPhotoState(deletePendingFile = true)
         }
     }
 
@@ -859,6 +898,7 @@ fun MapPlaceholderScreen(
 
                             mapViewModel.setCapturedPoints(savedPoints)
                             mapViewModel.setSelectedPointId(createdPointId)
+                            pendingPointPhotoId = createdPointId
 
                             // 🔥 IMPORTANTE: seguimos desactivando captura (tu lógica original)
                             isCaptureModeEnabled = false
@@ -871,7 +911,7 @@ fun MapPlaceholderScreen(
                                 )
                             }
 
-                            captureStatus = "Punto guardado y seleccionado: $createdPointName. Modo captura desactivado."
+                            captureStatus = "Punto guardado y seleccionado: $createdPointName. Puedes tomar foto ahora o continuar sin foto."
 
                             return@launch
                         }
@@ -999,6 +1039,109 @@ fun MapPlaceholderScreen(
                 isPointEditMode = isPointEditMode,
                 isDraggingPoint = isDraggingPoint
             )
+        }
+    }
+
+    val pointPhotoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { wasCaptured ->
+        val pointId = pendingPointPhotoId
+        val fileInfo = pendingPointPhotoFileInfo
+
+        if (pointId == null || fileInfo == null) {
+            coroutineScope.launch {
+                if (fileInfo != null) {
+                    deletePointPhotoFile(fileInfo.absolutePath)
+                }
+                clearPendingPointPhotoState(deletePendingFile = false)
+            }
+            captureStatus = "No hay punto pendiente para asociar foto."
+            return@rememberLauncherForActivityResult
+        }
+
+        coroutineScope.launch {
+            if (!wasCaptured) {
+                clearPendingPointPhotoState(deletePendingFile = true)
+                captureStatus = "Captura de foto cancelada."
+                return@launch
+            }
+
+            val photoFile = File(fileInfo.absolutePath)
+            if (!photoFile.exists() || photoFile.length() <= 0L) {
+                clearPendingPointPhotoState(deletePendingFile = true)
+                captureStatus = "No se pudo guardar la foto capturada."
+                return@launch
+            }
+
+            val safeDb = db
+            if (safeDb == null || farmId.isBlank()) {
+                clearPendingPointPhotoState(deletePendingFile = true)
+                captureStatus = "No se puede asociar foto en esta vista."
+                return@launch
+            }
+
+            val previousPhotoPath = mapViewModel.uiState.capturedPoints
+                .find { it.id == pointId }
+                ?.photoPath
+
+            val detectedMimeType = resolvePointPhotoMimeType(
+                photoPath = fileInfo.absolutePath,
+                photoFileName = fileInfo.fileName
+            )
+            val exportablePhotoName = fileInfo.fileName
+
+            val updated = mapViewModel.updatePointPhotoForPoint(
+                pointId = pointId,
+                photoPath = fileInfo.absolutePath,
+                photoName = exportablePhotoName,
+                photoCapturedAt = fileInfo.capturedAt,
+                photoMimeType = detectedMimeType,
+                photoSizeBytes = photoFile.length()
+            )
+
+            clearPendingPointPhotoState(deletePendingFile = false)
+
+            if (updated) {
+                if (!previousPhotoPath.isNullOrBlank() && previousPhotoPath != fileInfo.absolutePath) {
+                    deletePointPhotoFile(previousPhotoPath)
+                }
+                captureStatus = "Foto asociada al punto correctamente."
+            } else {
+                deletePointPhotoFile(fileInfo.absolutePath)
+                captureStatus = "No se pudo registrar la foto en la base de datos."
+            }
+        }
+    }
+
+    fun launchPointPhotoCapture(pointId: String) {
+        coroutineScope.launch {
+            clearPendingPointPhotoState(deletePendingFile = true)
+
+            val fileInfo = preparePointPhotoFileForCapture(
+                context = context,
+                pointId = pointId
+            )
+
+            if (fileInfo == null) {
+                captureStatus = "No se pudo preparar la captura de foto."
+                return@launch
+            }
+
+            val outputUri = try {
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    File(fileInfo.absolutePath)
+                )
+            } catch (_: Exception) {
+                deletePointPhotoFile(fileInfo.absolutePath)
+                captureStatus = "No se pudo abrir la cámara para guardar la foto."
+                return@launch
+            }
+
+            pendingPointPhotoId = pointId
+            pendingPointPhotoFileInfo = fileInfo
+            pointPhotoLauncher.launch(outputUri)
         }
     }
 
@@ -1140,6 +1283,11 @@ fun MapPlaceholderScreen(
         mapView.onResume()
 
         onDispose {
+            pendingPointPhotoFileInfo?.let { info ->
+                File(info.absolutePath).delete()
+            }
+            pendingPointPhotoFileInfo = null
+            pendingPointPhotoId = null
             mapView.onPause()
             mapView.onStop()
             mapView.onDestroy()
@@ -1472,6 +1620,84 @@ fun MapPlaceholderScreen(
                                 .padding(top = 8.dp)
                         ) {
                             Text("Deshacer último movimiento")
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            if (capturedPoints.isEmpty()) {
+                                captureStatus = "No hay puntos para exportar."
+                                return@Button
+                            }
+
+                            coroutineScope.launch {
+                                val kmzResult = exportPointsToKmzFile(
+                                    context = context,
+                                    points = capturedPoints,
+                                    documentName = "Puntos $farmName",
+                                    kmzBaseFileName = farmName
+                                )
+                                captureStatus = if (kmzResult != null) {
+                                    "KMZ exportado: ${kmzResult.fileName}"
+                                } else {
+                                    "No se pudo exportar el KMZ."
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        colors = ButtonDefaults.outlinedButtonColors()
+                    ) {
+                        Text("Exportar puntos a KMZ")
+                    }
+
+                    if (pendingPointPhotoId != null) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp)
+                            ) {
+                                Text(
+                                    text = "Foto opcional para el punto recién capturado",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+
+                                Button(
+                                    onClick = {
+                                        val pointId = pendingPointPhotoId
+                                        if (pointId != null) {
+                                            launchPointPhotoCapture(pointId)
+                                        } else {
+                                            captureStatus = "No hay punto pendiente para foto."
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp)
+                                ) {
+                                    Text("Tomar foto del punto")
+                                }
+
+                                Button(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            clearPendingPointPhotoState(deletePendingFile = true)
+                                            captureStatus = "Punto guardado sin foto."
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors()
+                                ) {
+                                    Text("Continuar sin foto")
+                                }
+                            }
                         }
                     }
 
@@ -2416,6 +2642,12 @@ fun MapPlaceholderScreen(
                                         style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.padding(top = 4.dp)
                                     )
+
+                                    Text(
+                                        text = if (point.photoPath != null) "Foto: Sí" else "Foto: No",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
                                 }
                             }
                         }
@@ -2493,6 +2725,66 @@ fun MapPlaceholderScreen(
                                     text = "Longitud: ${formatCoordinate(selectedPoint.longitude)}",
                                     style = MaterialTheme.typography.bodyMedium
                                 )
+                            }
+                        }
+
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp)
+                            ) {
+                                val hasPhoto = !selectedPoint.photoPath.isNullOrBlank()
+                                Text(
+                                    text = if (hasPhoto) "Foto asociada: Sí" else "Foto asociada: No",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+
+                                if (hasPhoto && selectedPointPhotoBitmap != null) {
+                                    Button(
+                                        onClick = {
+                                            showSelectedPointPhoto = !showSelectedPointPhoto
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 8.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors()
+                                    ) {
+                                        Text(
+                                            if (showSelectedPointPhoto) "Ocultar foto"
+                                            else "Ver foto"
+                                        )
+                                    }
+
+                                    if (showSelectedPointPhoto) {
+                                        Image(
+                                            bitmap = selectedPointPhotoBitmap.asImageBitmap(),
+                                            contentDescription = "Foto del punto seleccionado",
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 8.dp),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    }
+                                }
+
+                                Button(
+                                    onClick = {
+                                        launchPointPhotoCapture(selectedPoint.id)
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors()
+                                ) {
+                                    Text(
+                                        if (hasPhoto) "Reemplazar foto"
+                                        else "Tomar foto"
+                                    )
+                                }
                             }
                         }
 
@@ -2650,6 +2942,7 @@ fun MapPlaceholderScreen(
                         Button(
                             onClick = {
                                 val pointId = selectedPoint.id
+                                val photoPathToDelete = selectedPoint.photoPath
 
                                 coroutineScope.launch {
                                     val safeDb = db ?: return@launch
@@ -2660,8 +2953,13 @@ fun MapPlaceholderScreen(
                                         pointId = pointId
                                     )
 
+                                    deletePointPhotoFile(photoPathToDelete)
+
                                     mapViewModel.setCapturedPoints(updatedPoints)
                                     mapViewModel.clearPointSelection()
+                                    if (pendingPointPhotoId == pointId) {
+                                        clearPendingPointPhotoState(deletePendingFile = true)
+                                    }
                                     captureStatus = "Punto eliminado"
                                 }
                             },

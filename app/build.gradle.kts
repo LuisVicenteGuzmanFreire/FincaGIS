@@ -56,6 +56,7 @@ dependencies {
     implementation("org.maplibre.gl:android-sdk:13.0.1")
     implementation("androidx.navigation:navigation-compose:2.9.0")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.exifinterface:exifinterface:1.4.1")
     implementation("androidx.room:room-runtime:2.8.4")
     implementation("androidx.room:room-ktx:2.8.4")
     implementation("com.google.android.gms:play-services-location:21.3.0")

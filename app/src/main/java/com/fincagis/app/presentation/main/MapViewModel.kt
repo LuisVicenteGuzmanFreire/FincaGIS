@@ -15,6 +15,7 @@ import com.fincagis.app.presentation.main.map.loadCompleteMapData
 import com.fincagis.app.presentation.main.map.persistPolygonVertices
 import com.fincagis.app.presentation.main.map.persistPolylineVertices
 import com.fincagis.app.presentation.main.map.updatePointAttributes
+import com.fincagis.app.presentation.main.map.updatePointPhotoReference
 import com.fincagis.app.presentation.main.map.updatePointPosition
 import com.fincagis.app.presentation.main.map.updatePolygonAttributes
 import com.fincagis.app.presentation.main.map.updatePolylineAttributes
@@ -245,6 +246,32 @@ class MapViewModel(
                 name = name,
                 description = description,
                 category = category
+            )
+        )
+        return true
+    }
+
+    suspend fun updatePointPhotoForPoint(
+        pointId: String,
+        photoPath: String,
+        photoName: String,
+        photoCapturedAt: Long,
+        photoMimeType: String?,
+        photoSizeBytes: Long?
+    ): Boolean {
+        val safeDb = db ?: return false
+        if (farmId.isBlank()) return false
+
+        uiState = uiState.copy(
+            capturedPoints = updatePointPhotoReference(
+                db = safeDb,
+                farmId = farmId,
+                pointId = pointId,
+                photoPath = photoPath,
+                photoName = photoName,
+                photoCapturedAt = photoCapturedAt,
+                photoMimeType = photoMimeType,
+                photoSizeBytes = photoSizeBytes
             )
         )
         return true

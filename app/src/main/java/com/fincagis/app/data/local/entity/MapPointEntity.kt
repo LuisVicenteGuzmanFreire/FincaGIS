@@ -25,5 +25,12 @@ data class MapPointEntity(
     val category: String,
     val latitude: Double,
     val longitude: Double,
-    val createdAt: Long
+    val createdAt: Long,
+    // Absolute local path (private app storage). Not intended for export as-is.
+    val photoPath: String? = null,
+    // Stable exportable file name (used later by KMZ exporter when packaging media).
+    val photoName: String? = null,
+    val photoCapturedAt: Long? = null,
+    val photoMimeType: String? = null,
+    val photoSizeBytes: Long? = null
 )

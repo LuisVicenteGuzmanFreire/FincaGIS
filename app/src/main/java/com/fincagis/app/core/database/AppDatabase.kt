@@ -28,7 +28,7 @@ import com.fincagis.app.data.local.entity.PolylineVertexEntity
         PolylineEntity::class,
         PolylineVertexEntity::class
     ],
-    version = 9,
+    version = 11,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
