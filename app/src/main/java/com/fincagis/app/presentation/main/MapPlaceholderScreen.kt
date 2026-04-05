@@ -1,4 +1,4 @@
-﻿package com.fincagis.app.presentation.main
+package com.fincagis.app.presentation.main
 
 import android.Manifest
 import android.content.Context
@@ -42,6 +42,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fincagis.app.core.database.AppDatabase
 import com.fincagis.app.core.ui.AppTopBar
 import com.fincagis.app.core.ui.theme.FincagisTheme
@@ -88,6 +89,12 @@ import com.fincagis.app.presentation.main.map.colorFromHex
 import com.fincagis.app.presentation.main.map.findNearestVertexToTap
 import com.fincagis.app.presentation.main.map.findNearestSegmentToTap
 import com.fincagis.app.presentation.main.map.insertVertexIntoSegment
+import com.fincagis.app.presentation.main.map.findNearestPointToTap
+import com.fincagis.app.presentation.main.map.togglePointEditMode
+import com.fincagis.app.presentation.main.map.togglePolygonEditMode
+import com.fincagis.app.presentation.main.map.togglePolylineEditMode
+import com.fincagis.app.presentation.main.map.clearAfterPolygonDelete
+import com.fincagis.app.presentation.main.map.clearAfterPolygonDeselect
 import com.fincagis.app.presentation.main.map.formatCoordinate
 import com.fincagis.app.presentation.main.map.formatPointDescription
 import com.fincagis.app.presentation.main.map.formatTimestamp
@@ -105,17 +112,20 @@ import com.fincagis.app.presentation.main.map.deletePointById
 import com.fincagis.app.presentation.main.map.deletePolygonById
 import com.fincagis.app.presentation.main.map.deleteSelectedVertexFromPolygon
 import com.fincagis.app.presentation.main.map.getVerticesOfSelectedPolygon
-import com.fincagis.app.presentation.main.map.loadMapData
 import com.fincagis.app.presentation.main.map.persistPolygonVertices
 import com.fincagis.app.presentation.main.map.savePolygon
-import com.fincagis.app.presentation.main.map.updatePointAttributes
+import com.fincagis.app.presentation.main.map.updatePointPosition
 import com.fincagis.app.presentation.main.map.MapSelectionResult
+import com.fincagis.app.presentation.main.map.MapSelectionCenterTarget
 import com.fincagis.app.presentation.main.map.resolveMapSelection
+import com.fincagis.app.presentation.main.map.applySelectionResultState
+import com.fincagis.app.presentation.main.map.handlePointListSelection
+import com.fincagis.app.presentation.main.map.handlePolygonListSelection
+import com.fincagis.app.presentation.main.map.handlePolylineListSelection
 import com.fincagis.app.presentation.main.map.addOrUpdateSavedPolylines
 import com.fincagis.app.presentation.main.map.addOrUpdateTemporaryPolyline
 import com.fincagis.app.presentation.main.map.buildNextPolylineName
 import com.fincagis.app.presentation.main.map.deletePolylineById
-import com.fincagis.app.presentation.main.map.loadPolylineData
 import com.fincagis.app.presentation.main.map.savePolyline
 import com.fincagis.app.presentation.main.map.deleteSelectedVertexFromPolyline
 import com.fincagis.app.presentation.main.map.getVerticesOfSelectedPolyline
@@ -136,32 +146,24 @@ fun MapPlaceholderScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val mapViewModel: MapViewModel = viewModel(
+        key = "map-$farmId",
+        factory = MapViewModelFactory(
+            db = db,
+            farmId = farmId
+        )
+    )
     val clipboardManager = remember {
         context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     }
     val fusedLocationClient = remember {
         LocationServices.getFusedLocationProviderClient(context)
     }
-    var isDraggingVertex by remember { mutableStateOf(false) }
-    var isPolygonEditMode by remember { mutableStateOf(false) }
-    var isPolylineEditMode by remember { mutableStateOf(false) }
-    var selectedVertexId by remember { mutableStateOf<String?>(null) }
-
     var userLatitude by remember { mutableStateOf<Double?>(null) }
     var userLongitude by remember { mutableStateOf<Double?>(null) }
-    var locationStatus by remember { mutableStateOf("UbicaciÃ³n del dispositivo no disponible.") }
-    var captureStatus by remember { mutableStateOf("Modo selecciÃ³n activo.") }
+    var locationStatus by remember { mutableStateOf("Ubicación del dispositivo no disponible.") }
+    var captureStatus by remember { mutableStateOf("Modo selección activo.") }
     var mapLibreMap by remember { mutableStateOf<MapLibreMap?>(null) }
-    var capturedPoints by remember { mutableStateOf<List<MapPointEntity>>(emptyList()) }
-    var savedPolygons by remember {
-        mutableStateOf<List<Pair<PolygonEntity, List<PolygonVertexEntity>>>>(emptyList())
-    }
-    var savedPolylines by remember {
-        mutableStateOf<List<Pair<PolylineEntity, List<PolylineVertexEntity>>>>(emptyList())
-    }
-    var selectedPointId by remember { mutableStateOf<String?>(null) }
-    var selectedPolygonId by remember { mutableStateOf<String?>(null) }
-    var selectedPolylineId by remember { mutableStateOf<String?>(null) }
     var isCaptureModeEnabled by remember { mutableStateOf(false) }
     var isPolygonCaptureModeEnabled by remember { mutableStateOf(false) }
     var isPolylineCaptureModeEnabled by remember { mutableStateOf(false) }
@@ -175,7 +177,27 @@ fun MapPlaceholderScreen(
     var pointNameInput by remember { mutableStateOf("") }
     var pointDescriptionInput by remember { mutableStateOf("") }
     var pointCategoryInput by remember { mutableStateOf("Muestreo") }
-    val selectedPoint = capturedPoints.find { it.id == selectedPointId }
+    var selectedPolygonNameInput by remember { mutableStateOf("") }
+    var selectedPolygonDescriptionInput by remember { mutableStateOf("") }
+    var selectedPolygonCategoryInput by remember { mutableStateOf("General") }
+    var selectedPolylineNameInput by remember { mutableStateOf("") }
+    var selectedPolylineDescriptionInput by remember { mutableStateOf("") }
+    var selectedPolylineCategoryInput by remember { mutableStateOf("General") }
+    val uiState = mapViewModel.uiState
+    val capturedPoints = uiState.capturedPoints
+    val savedPolygons = uiState.savedPolygons
+    val savedPolylines = uiState.savedPolylines
+    val selectedPointId = uiState.selectedPointId
+    val selectedPolygonId = uiState.selectedPolygonId
+    val selectedPolylineId = uiState.selectedPolylineId
+    val isPointEditMode = uiState.isPointEditMode
+    val isDraggingPoint = uiState.isDraggingPoint
+    val selectedVertexId = uiState.selectedVertexId
+    val isDraggingVertex = uiState.isDraggingVertex
+    val isPolygonEditMode = uiState.isPolygonEditMode
+    val isPolylineEditMode = uiState.isPolylineEditMode
+    val hasUndoAction = uiState.hasUndoAction
+    val selectedPoint = uiState.capturedPoints.find { it.id == uiState.selectedPointId }
     val pointCategories = listOf(
         "Muestreo",
         "Referencia",
@@ -183,8 +205,8 @@ fun MapPlaceholderScreen(
         "Infraestructura"
     )
 
-    val selectedPolygon = savedPolygons.find { it.first.id == selectedPolygonId }
-    val selectedPolyline = savedPolylines.find { it.first.id == selectedPolylineId }
+    val selectedPolygon = uiState.savedPolygons.find { it.first.id == uiState.selectedPolygonId }
+    val selectedPolyline = uiState.savedPolylines.find { it.first.id == uiState.selectedPolylineId }
 
     LaunchedEffect(selectedPointId, capturedPoints) {
         val point = capturedPoints.find { it.id == selectedPointId }
@@ -197,6 +219,32 @@ fun MapPlaceholderScreen(
             pointNameInput = ""
             pointDescriptionInput = ""
             pointCategoryInput = "Muestreo"
+        }
+    }
+
+    LaunchedEffect(selectedPolygonId, savedPolygons) {
+        val polygon = savedPolygons.find { it.first.id == selectedPolygonId }?.first
+        if (polygon != null) {
+            selectedPolygonNameInput = polygon.name
+            selectedPolygonDescriptionInput = polygon.description.orEmpty()
+            selectedPolygonCategoryInput = polygon.category
+        } else {
+            selectedPolygonNameInput = ""
+            selectedPolygonDescriptionInput = ""
+            selectedPolygonCategoryInput = "General"
+        }
+    }
+
+    LaunchedEffect(selectedPolylineId, savedPolylines) {
+        val polyline = savedPolylines.find { it.first.id == selectedPolylineId }?.first
+        if (polyline != null) {
+            selectedPolylineNameInput = polyline.name
+            selectedPolylineDescriptionInput = polyline.description.orEmpty()
+            selectedPolylineCategoryInput = polyline.category
+        } else {
+            selectedPolylineNameInput = ""
+            selectedPolylineDescriptionInput = ""
+            selectedPolylineCategoryInput = "General"
         }
     }
 
@@ -214,7 +262,7 @@ fun MapPlaceholderScreen(
 
     fun loadCurrentLocation() {
         if (!hasLocationPermission(context)) {
-            locationStatus = "Permiso de ubicaciÃ³n no concedido."
+            locationStatus = "Permiso de ubicación no concedido."
             return
         }
 
@@ -232,9 +280,9 @@ fun MapPlaceholderScreen(
                     if (location != null) {
                         userLatitude = location.latitude
                         userLongitude = location.longitude
-                        locationStatus = "UbicaciÃ³n obtenida correctamente."
+                        locationStatus = "Ubicación obtenida correctamente."
                     } else {
-                        locationStatus = "UbicaciÃ³n recibida nula."
+                        locationStatus = "Ubicación recibida nula."
                     }
 
                     fusedLocationClient.removeLocationUpdates(this)
@@ -247,7 +295,7 @@ fun MapPlaceholderScreen(
                 context.mainLooper
             )
         } catch (_: SecurityException) {
-            locationStatus = "Error de permisos de ubicaciÃ³n."
+            locationStatus = "Error de permisos de ubicación."
         }
     }
 
@@ -260,7 +308,7 @@ fun MapPlaceholderScreen(
         if (grantedFine || grantedCoarse) {
             loadCurrentLocation()
         } else {
-            locationStatus = "Permiso de ubicaciÃ³n denegado."
+            locationStatus = "Permiso de ubicación denegado."
         }
     }
 
@@ -278,19 +326,7 @@ fun MapPlaceholderScreen(
     }
 
     LaunchedEffect(db, farmId) {
-        if (db != null && farmId.isNotBlank()) {
-            val result = loadMapData(
-                db = db,
-                farmId = farmId
-            )
-
-            capturedPoints = result.first
-            savedPolygons = result.second
-            savedPolylines = loadPolylineData(
-                db = db,
-                farmId = farmId
-            )
-        }
+        mapViewModel.reloadCompleteMapData()
     }
 
     val mapView = remember {
@@ -298,12 +334,39 @@ fun MapPlaceholderScreen(
             onCreate(Bundle())
 
             setOnTouchListener { view, event ->
+                val touchUiState = mapViewModel.uiState
+                val capturedPoints = touchUiState.capturedPoints
+                val savedPolygons = touchUiState.savedPolygons
+                val savedPolylines = touchUiState.savedPolylines
+                val selectedPointId = touchUiState.selectedPointId
+                val selectedPolygonId = touchUiState.selectedPolygonId
+                val selectedPolylineId = touchUiState.selectedPolylineId
+                val isPointEditMode = touchUiState.isPointEditMode
+                val isDraggingPoint = touchUiState.isDraggingPoint
+                val selectedVertexId = touchUiState.selectedVertexId
+                val isDraggingVertex = touchUiState.isDraggingVertex
+                val isPolygonEditMode = touchUiState.isPolygonEditMode
+                val isPolylineEditMode = touchUiState.isPolylineEditMode
+                val isEditingPoint = isPointEditMode && selectedPointId != null
+                val isEditingPolygon = isPolygonEditMode && selectedPolygonId != null
+                val isEditingPolyline = isPolylineEditMode && selectedPolylineId != null
+
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    view.parent?.requestDisallowInterceptTouchEvent(true)
+                } else if (
+                    (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) &&
+                    !isDraggingVertex &&
+                    !isDraggingPoint
+                ) {
+                    view.parent?.requestDisallowInterceptTouchEvent(false)
+                }
 
                 if (
                     (
-                            (!isPolygonEditMode || selectedPolygonId == null) &&
-                                    (!isPolylineEditMode || selectedPolylineId == null)
-                            ) ||
+                        !isEditingPoint &&
+                        !isEditingPolygon &&
+                            !isEditingPolyline
+                        ) ||
                     db == null ||
                     farmId.isBlank()
                 ) {
@@ -311,7 +374,6 @@ fun MapPlaceholderScreen(
                 }
 
                 val map = mapLibreMap ?: return@setOnTouchListener false
-                val latLng = map.projection.fromScreenLocation(PointF(event.x, event.y))
                 val polygonVerticesForEdit = getVerticesOfSelectedPolygon(
                     savedPolygons = savedPolygons,
                     selectedPolygonId = selectedPolygonId
@@ -322,33 +384,60 @@ fun MapPlaceholderScreen(
                     selectedPolylineId = selectedPolylineId
                 )
 
-                val isEditingPolygon = isPolygonEditMode && selectedPolygonId != null
-                val isEditingPolyline = isPolylineEditMode && selectedPolylineId != null
                 val threshold = getSelectionThreshold(mapLibreMap) * 1.8
 
                 when (event.actionMasked) {
 
                     MotionEvent.ACTION_DOWN -> {
-                        if (isEditingPolygon) {
+                        val downLatLng = map.projection.fromScreenLocation(PointF(event.x, event.y))
+                        if (downLatLng == null) {
+                            return@setOnTouchListener false
+                        }
+
+                        if (isEditingPoint) {
+                            val selectedPointForEdit = capturedPoints.find { it.id == selectedPointId }
+                            if (selectedPointForEdit != null) {
+                                val tappedPoint = findNearestPointToTap(
+                                    points = listOf(selectedPointForEdit),
+                                    tapLatitude = downLatLng.latitude,
+                                    tapLongitude = downLatLng.longitude,
+                                    map = mapLibreMap
+                                )
+
+                                if (tappedPoint != null) {
+                                    mapViewModel.registerPointMoveUndo(selectedPointForEdit)
+                                    mapViewModel.startPointDrag()
+                                    captureStatus = "Arrastrando punto..."
+                                    view.parent?.requestDisallowInterceptTouchEvent(true)
+                                    return@setOnTouchListener true
+                                }
+                            }
+                        } else if (isEditingPolygon) {
                             val tappedVertex = findNearestVertexToTap(
                                 vertices = polygonVerticesForEdit,
-                                tapLat = latLng.latitude,
-                                tapLng = latLng.longitude,
+                                tapLat = downLatLng.latitude,
+                                tapLng = downLatLng.longitude,
                                 threshold = threshold
                             )
 
                             if (tappedVertex != null) {
-                                selectedVertexId = tappedVertex.id
-                                isDraggingVertex = true
-                                captureStatus = "Arrastrando vÃ©rtice..."
+                                selectedPolygonId?.let { polygonId ->
+                                    mapViewModel.registerPolygonVertexMoveUndo(
+                                        polygonId = polygonId,
+                                        vertices = polygonVerticesForEdit
+                                    )
+                                }
+                                mapViewModel.setSelectedVertexId(tappedVertex.id)
+                                mapViewModel.setDraggingVertex(true)
+                                captureStatus = "Arrastrando vértice..."
                                 view.parent?.requestDisallowInterceptTouchEvent(true)
                                 return@setOnTouchListener true
                             }
 
                             val tappedSegment = findNearestSegmentToTap(
                                 vertices = polygonVerticesForEdit,
-                                tapLat = latLng.latitude,
-                                tapLng = latLng.longitude,
+                                tapLat = downLatLng.latitude,
+                                tapLng = downLatLng.longitude,
                                 threshold = threshold
                             )
 
@@ -357,28 +446,30 @@ fun MapPlaceholderScreen(
                                 val updatedVertices = insertVertexIntoSegment(
                                     vertices = polygonVerticesForEdit,
                                     insertIndex = insertIndex,
-                                    lat = latLng.latitude,
-                                    lng = latLng.longitude
+                                    lat = downLatLng.latitude,
+                                    lng = downLatLng.longitude
                                 )
 
                                 val insertedVertex = updatedVertices.getOrNull(insertIndex + 1)
 
-                                savedPolygons = savedPolygons.map { (poly, verts) ->
+                                mapViewModel.setSavedPolygons(savedPolygons.map { (poly, verts) ->
                                     if (poly.id == selectedPolygonId) {
                                         poly to updatedVertices
                                     } else {
                                         poly to verts
                                     }
-                                }
+                                })
 
-                                selectedVertexId = insertedVertex?.id
-                                captureStatus = "VÃ©rtice insertado en polÃ­gono."
+                                mapViewModel.setSelectedVertexId(insertedVertex?.id)
+                                captureStatus = "Vértice insertado en polígono."
 
                                 coroutineScope.launch {
-                                    savedPolygons = persistPolygonVertices(
-                                        db = db,
-                                        farmId = farmId,
-                                        vertices = updatedVertices.sortedBy { it.vertexOrder }
+                                    mapViewModel.setSavedPolygons(
+                                        persistPolygonVertices(
+                                            db = db,
+                                            farmId = farmId,
+                                            vertices = updatedVertices.sortedBy { it.vertexOrder }
+                                        )
                                     )
                                 }
 
@@ -387,23 +478,29 @@ fun MapPlaceholderScreen(
                         } else if (isEditingPolyline) {
                             val tappedVertex = findNearestPolylineVertexToTap(
                                 vertices = polylineVerticesForEdit,
-                                tapLat = latLng.latitude,
-                                tapLng = latLng.longitude,
+                                tapLat = downLatLng.latitude,
+                                tapLng = downLatLng.longitude,
                                 threshold = threshold
                             )
 
                             if (tappedVertex != null) {
-                                selectedVertexId = tappedVertex.id
-                                isDraggingVertex = true
-                                captureStatus = "Arrastrando vÃ©rtice..."
+                                selectedPolylineId?.let { polylineId ->
+                                    mapViewModel.registerPolylineVertexMoveUndo(
+                                        polylineId = polylineId,
+                                        vertices = polylineVerticesForEdit
+                                    )
+                                }
+                                mapViewModel.setSelectedVertexId(tappedVertex.id)
+                                mapViewModel.setDraggingVertex(true)
+                                captureStatus = "Arrastrando vértice..."
                                 view.parent?.requestDisallowInterceptTouchEvent(true)
                                 return@setOnTouchListener true
                             }
 
                             val tappedSegment = findNearestPolylineSegmentToTap(
                                 vertices = polylineVerticesForEdit,
-                                tapLat = latLng.latitude,
-                                tapLng = latLng.longitude,
+                                tapLat = downLatLng.latitude,
+                                tapLng = downLatLng.longitude,
                                 threshold = threshold
                             )
 
@@ -412,30 +509,32 @@ fun MapPlaceholderScreen(
                                 val updatedVertices = insertVertexIntoPolylineSegment(
                                     vertices = polylineVerticesForEdit,
                                     insertIndex = insertIndex,
-                                    lat = latLng.latitude,
-                                    lng = latLng.longitude
+                                    lat = downLatLng.latitude,
+                                    lng = downLatLng.longitude
                                 )
 
                                 val insertedVertex = updatedVertices.getOrNull(insertIndex + 1)
 
-                                savedPolylines = savedPolylines.map { (line, verts) ->
+                                mapViewModel.setSavedPolylines(savedPolylines.map { (line, verts) ->
                                     if (line.id == selectedPolylineId) {
                                         line to updatedVertices
                                     } else {
                                         line to verts
                                     }
-                                }
+                                })
 
-                                selectedVertexId = insertedVertex?.id
-                                captureStatus = "VÃ©rtice insertado en lÃ­nea."
+                                mapViewModel.setSelectedVertexId(insertedVertex?.id)
+                                captureStatus = "Vértice insertado en línea."
 
                                 val polylineId = selectedPolylineId!!
                                 coroutineScope.launch {
-                                    savedPolylines = persistPolylineVertices(
-                                        db = db,
-                                        farmId = farmId,
-                                        polylineId = polylineId,
-                                        vertices = updatedVertices.sortedBy { it.vertexOrder }
+                                    mapViewModel.setSavedPolylines(
+                                        persistPolylineVertices(
+                                            db = db,
+                                            farmId = farmId,
+                                            polylineId = polylineId,
+                                            vertices = updatedVertices.sortedBy { it.vertexOrder }
+                                        )
                                     )
                                 }
 
@@ -447,6 +546,25 @@ fun MapPlaceholderScreen(
                     }
 
                     MotionEvent.ACTION_MOVE -> {
+                        val moveLatLng = map.projection.fromScreenLocation(PointF(event.x, event.y))
+                        if (moveLatLng == null) {
+                            if (isDraggingPoint || isDraggingVertex) {
+                                return@setOnTouchListener true
+                            }
+                            return@setOnTouchListener false
+                        }
+
+                        if (isDraggingPoint && isEditingPoint && selectedPointId != null) {
+                            mapViewModel.updatePointPositionInUi(
+                                pointId = selectedPointId,
+                                latitude = moveLatLng.latitude,
+                                longitude = moveLatLng.longitude
+                            )
+
+                            view.parent?.requestDisallowInterceptTouchEvent(true)
+                            return@setOnTouchListener true
+                        }
+
                         if (isDraggingVertex && selectedVertexId != null) {
                             val vertexId = selectedVertexId!!
 
@@ -454,21 +572,21 @@ fun MapPlaceholderScreen(
                                 val updatedVertices = polygonVerticesForEdit.map {
                                     if (it.id == vertexId) {
                                         it.copy(
-                                            latitude = latLng.latitude,
-                                            longitude = latLng.longitude
+                                            latitude = moveLatLng.latitude,
+                                            longitude = moveLatLng.longitude
                                         )
                                     } else {
                                         it
                                     }
                                 }
 
-                                savedPolygons = savedPolygons.map { (poly, verts) ->
+                                mapViewModel.setSavedPolygons(savedPolygons.map { (poly, verts) ->
                                     if (poly.id == selectedPolygonId) {
                                         poly to updatedVertices
                                     } else {
                                         poly to verts
                                     }
-                                }
+                                })
 
                                 view.parent?.requestDisallowInterceptTouchEvent(true)
                                 return@setOnTouchListener true
@@ -478,21 +596,21 @@ fun MapPlaceholderScreen(
                                 val updatedVertices = polylineVerticesForEdit.map {
                                     if (it.id == vertexId) {
                                         it.copy(
-                                            latitude = latLng.latitude,
-                                            longitude = latLng.longitude
+                                            latitude = moveLatLng.latitude,
+                                            longitude = moveLatLng.longitude
                                         )
                                     } else {
                                         it
                                     }
                                 }
 
-                                savedPolylines = savedPolylines.map { (line, verts) ->
+                                mapViewModel.setSavedPolylines(savedPolylines.map { (line, verts) ->
                                     if (line.id == selectedPolylineId) {
                                         line to updatedVertices
                                     } else {
                                         line to verts
                                     }
-                                }
+                                })
 
                                 view.parent?.requestDisallowInterceptTouchEvent(true)
                                 return@setOnTouchListener true
@@ -503,8 +621,42 @@ fun MapPlaceholderScreen(
                     }
 
                     MotionEvent.ACTION_UP -> {
+                        val upLatLng = map.projection.fromScreenLocation(PointF(event.x, event.y))
+
+                        if (isDraggingPoint && selectedPointId != null) {
+                            view.parent?.requestDisallowInterceptTouchEvent(false)
+
+                            if (upLatLng == null) {
+                                mapViewModel.stopPointDrag()
+                                return@setOnTouchListener true
+                            }
+
+                            coroutineScope.launch {
+                                if (db != null) {
+                                    mapViewModel.setCapturedPoints(
+                                        updatePointPosition(
+                                            db = db,
+                                            farmId = farmId,
+                                            pointId = selectedPointId,
+                                            latitude = upLatLng.latitude,
+                                            longitude = upLatLng.longitude
+                                        )
+                                    )
+                                }
+                                mapViewModel.stopPointDrag()
+                                captureStatus = "Punto actualizado."
+                            }
+
+                            return@setOnTouchListener true
+                        }
+
                         if (isDraggingVertex && selectedVertexId != null) {
                             view.parent?.requestDisallowInterceptTouchEvent(false)
+
+                            if (upLatLng == null) {
+                                mapViewModel.setDraggingVertex(false)
+                                return@setOnTouchListener true
+                            }
 
                             coroutineScope.launch {
                                 if (isPolygonEditMode) {
@@ -516,10 +668,12 @@ fun MapPlaceholderScreen(
                                             ?.sortedBy { it.vertexOrder }
                                             ?: emptyList()
 
-                                        savedPolygons = persistPolygonVertices(
-                                            db = db,
-                                            farmId = farmId,
-                                            vertices = currentVerticesInMemory
+                                        mapViewModel.setSavedPolygons(
+                                            persistPolygonVertices(
+                                                db = db,
+                                                farmId = farmId,
+                                                vertices = currentVerticesInMemory
+                                            )
                                         )
                                     }
                                 } else if (isPolylineEditMode) {
@@ -531,16 +685,18 @@ fun MapPlaceholderScreen(
                                             ?.sortedBy { it.vertexOrder }
                                             ?: emptyList()
 
-                                        savedPolylines = persistPolylineVertices(
-                                            db = db,
-                                            farmId = farmId,
-                                            polylineId = polylineId,
-                                            vertices = currentVerticesInMemory
+                                        mapViewModel.setSavedPolylines(
+                                            persistPolylineVertices(
+                                                db = db,
+                                                farmId = farmId,
+                                                polylineId = polylineId,
+                                                vertices = currentVerticesInMemory
+                                            )
                                         )
                                     }
                                 }
-                                isDraggingVertex = false
-                                captureStatus = "VÃ©rtice actualizado."
+                                mapViewModel.setDraggingVertex(false)
+                                captureStatus = "Vértice actualizado."
                             }
 
                             return@setOnTouchListener true
@@ -550,54 +706,39 @@ fun MapPlaceholderScreen(
                     }
 
                     MotionEvent.ACTION_CANCEL -> {
-                        if (isDraggingVertex && selectedVertexId != null) {
-                            view.parent?.requestDisallowInterceptTouchEvent(false)
+                        view.parent?.requestDisallowInterceptTouchEvent(false)
+
+                        if (isDraggingPoint && selectedPointId != null) {
+                            mapViewModel.stopPointDrag()
+                            mapViewModel.clearUndoAction()
 
                             coroutineScope.launch {
-                                if (isPolygonEditMode) {
-                                    val polygonId = selectedPolygonId
-                                    if (polygonId != null && db != null) {
-                                        val currentVerticesInMemory = savedPolygons
-                                            .find { it.first.id == polygonId }
-                                            ?.second
-                                            ?.sortedBy { it.vertexOrder }
-                                            ?: emptyList()
-
-                                        savedPolygons = persistPolygonVertices(
-                                            db = db,
-                                            farmId = farmId,
-                                            vertices = currentVerticesInMemory
-                                        )
-                                    }
-                                } else if (isPolylineEditMode) {
-                                    val polylineId = selectedPolylineId
-                                    if (polylineId != null && db != null) {
-                                        val currentVerticesInMemory = savedPolylines
-                                            .find { it.first.id == polylineId }
-                                            ?.second
-                                            ?.sortedBy { it.vertexOrder }
-                                            ?: emptyList()
-
-                                        savedPolylines = persistPolylineVertices(
-                                            db = db,
-                                            farmId = farmId,
-                                            polylineId = polylineId,
-                                            vertices = currentVerticesInMemory
-                                        )
-                                    }
+                                if (db != null) {
+                                    mapViewModel.reloadCompleteMapData()
                                 }
-
-                                isDraggingVertex = false
-                                captureStatus = "VÃ©rtice actualizado."
                             }
 
                             return@setOnTouchListener true
                         }
 
-                        isDraggingVertex = false
-                        false
-                    }
+                        if (isDraggingVertex && selectedVertexId != null) {
+                            mapViewModel.setDraggingVertex(false)
+                            mapViewModel.setSelectedVertexId(null)
+                            mapViewModel.clearUndoAction()
 
+                            coroutineScope.launch {
+                                if (db != null) {
+                                    mapViewModel.reloadCompleteMapData()
+                                }
+                            }
+
+                            return@setOnTouchListener true
+                        }
+
+                        mapViewModel.setDraggingVertex(false)
+                        mapViewModel.stopPointDrag()
+                        true
+                    }
                     else -> false
                 }
             }
@@ -655,36 +796,48 @@ fun MapPlaceholderScreen(
                 }
 
                 map.addOnMapClickListener { latLng ->
-                    if (db == null || farmId.isBlank()) {
+                    val currentDb = db
+                    val currentFarmId = farmId
+                    val clickUiState = mapViewModel.uiState
+                    val capturedPoints = clickUiState.capturedPoints
+                    val savedPolygons = clickUiState.savedPolygons
+                    val savedPolylines = clickUiState.savedPolylines
+                    val selectedPolygonId = clickUiState.selectedPolygonId
+                    val selectedPolylineId = clickUiState.selectedPolylineId
+                    val selectedVertexId = clickUiState.selectedVertexId
+                    val isPolygonEditMode = clickUiState.isPolygonEditMode
+                    val isPolylineEditMode = clickUiState.isPolylineEditMode
+
+                    if (currentDb == null || currentFarmId.isBlank()) {
                         captureStatus = "No se puede guardar el punto en esta vista."
                         return@addOnMapClickListener true
                     }
 
                     coroutineScope.launch {
 
-                        // ðŸ”´ PRIORIDAD 1: POLÃGONO
+                        // 🔴 PRIORIDAD 1: POLÍGONO
                         if (isPolygonCaptureModeEnabled) {
                             val updatedVertices = polygonVertices + latLng
                             polygonVertices = updatedVertices
 
-                            captureStatus = "VÃ©rtice agregado al polÃ­gono. Total actual: ${updatedVertices.size}"
+                            captureStatus = "Vértice agregado al polígono. Total actual: ${updatedVertices.size}"
                             return@launch
                         }
 
-                        // ðŸŸ  PRIORIDAD 1.5: POLILÃNEA
+                        // 🟠 PRIORIDAD 1.5: POLILÍNEA
                         if (isPolylineCaptureModeEnabled) {
                             val updatedVertices = polylineVertices + latLng
                             polylineVertices = updatedVertices
 
-                            captureStatus = "VÃ©rtice agregado a la lÃ­nea. Total actual: ${updatedVertices.size}"
+                            captureStatus = "Vértice agregado a la línea. Total actual: ${updatedVertices.size}"
                             return@launch
                         }
 
                         // ðŸŸ¢ PRIORIDAD 2: CAPTURA DE PUNTO
                         if (isCaptureModeEnabled) {
                             val result = createPointAtLocation(
-                                db = db,
-                                farmId = farmId,
+                                db = currentDb,
+                                farmId = currentFarmId,
                                 captureCategory = captureCategory,
                                 latitude = latLng.latitude,
                                 longitude = latLng.longitude
@@ -694,10 +847,10 @@ fun MapPlaceholderScreen(
                             val createdPointName = result.second
                             val savedPoints = result.third
 
-                            capturedPoints = savedPoints
-                            selectedPointId = createdPointId
+                            mapViewModel.setCapturedPoints(savedPoints)
+                            mapViewModel.setSelectedPointId(createdPointId)
 
-                            // ðŸ”¥ IMPORTANTE: seguimos desactivando captura (tu lÃ³gica original)
+                            // 🔥 IMPORTANTE: seguimos desactivando captura (tu lógica original)
                             isCaptureModeEnabled = false
 
                             val createdPoint = savedPoints.find { it.id == createdPointId }
@@ -713,7 +866,7 @@ fun MapPlaceholderScreen(
                             return@launch
                         }
 
-                        // ðŸŸ¡ PRIORIDAD 2.5: EDICIÃ“N DE POLÃGONO
+                        // 🟡 PRIORIDAD 2.5: EDICIÓN DE POLÍGONO
                         if (isPolygonEditMode && selectedPolygonId != null) {
                             val polygonVerticesForEdit = savedPolygons
                                 .find { it.first.id == selectedPolygonId }
@@ -746,20 +899,18 @@ fun MapPlaceholderScreen(
 
                             if (tappedVertex != null || tappedSegment != null || isTapInsidePolygon) {
                                 captureStatus = if (selectedVertexId != null) {
-                                    "Arrastra el vÃ©rtice seleccionado para moverlo."
+                                    "Arrastra el vértice seleccionado para moverlo."
                                 } else {
-                                    "Toca y arrastra un vÃ©rtice para editarlo."
+                                    "Toca y arrastra un vértice para editarlo."
                                 }
                                 return@launch
                             }
 
-                            isPolygonEditMode = false
-                            selectedVertexId = null
-                            isDraggingVertex = false
-                            captureStatus = "EdiciÃ³n de polÃ­gono finalizada."
+                            mapViewModel.finishPolygonEdit()
+                            captureStatus = "Edición de polígono finalizada."
                         }
 
-                        // âšª PRIORIDAD 3: SELECCIÃ“N
+                        // ⚪ PRIORIDAD 3: SELECCIÓN
 
                         val selectionResult = resolveMapSelection(
                             capturedPoints = capturedPoints,
@@ -770,75 +921,40 @@ fun MapPlaceholderScreen(
                             mapLibreMap = mapLibreMap
                         )
 
-                        when (selectionResult) {
-                            is MapSelectionResult.PointSelected -> {
-                                val point = selectionResult.point
+                        captureStatus = when (selectionResult) {
+                            is MapSelectionResult.PointSelected -> selectionResult.status
+                            is MapSelectionResult.PolygonSelected -> selectionResult.status
+                            is MapSelectionResult.PolylineSelected -> selectionResult.status
+                            is MapSelectionResult.NothingSelected -> selectionResult.status
+                        }
 
-                                selectedPointId = point.id
-                                selectedPolygonId = null
-                                selectedPolylineId = null
-                                isPolygonEditMode = false
-                                isPolylineEditMode = false
-                                selectedVertexId = null
-                                isDraggingVertex = false
-                                captureStatus = selectionResult.status
-
+                        when (val centerTarget = applySelectionResultState(mapViewModel, selectionResult)) {
+                            is MapSelectionCenterTarget.Point -> {
                                 centerOnSelectedPoint(
                                     mapLibreMap = mapLibreMap,
-                                    point = point
+                                    point = centerTarget.point
                                 )
                             }
 
-                            is MapSelectionResult.PolygonSelected -> {
-                                val polygon = selectionResult.polygon
-
-                                selectedPolygonId = polygon.id
-                                selectedPointId = null
-                                selectedPolylineId = null
-                                isPolygonEditMode = false
-                                isPolylineEditMode = false
-                                selectedVertexId = null
-                                isDraggingVertex = false
-                                captureStatus = selectionResult.status
-
-                                if (selectionResult.vertices.isNotEmpty()) {
+                            is MapSelectionCenterTarget.Polygon -> {
+                                if (centerTarget.vertices.isNotEmpty()) {
                                     centerOnSelectedPolygon(
                                         mapLibreMap = mapLibreMap,
-                                        vertices = selectionResult.vertices
+                                        vertices = centerTarget.vertices
                                     )
                                 }
                             }
 
-                            is MapSelectionResult.PolylineSelected -> {
-                                val polyline = selectionResult.polyline
-
-                                selectedPolylineId = polyline.id
-                                selectedPointId = null
-                                selectedPolygonId = null
-                                isPolygonEditMode = false
-                                isPolylineEditMode = false
-                                selectedVertexId = null
-                                isDraggingVertex = false
-                                captureStatus = selectionResult.status
-
-                                if (selectionResult.vertices.isNotEmpty()) {
+                            is MapSelectionCenterTarget.Polyline -> {
+                                if (centerTarget.vertices.isNotEmpty()) {
                                     centerOnSelectedPolyline(
                                         mapLibreMap = mapLibreMap,
-                                        vertices = selectionResult.vertices
+                                        vertices = centerTarget.vertices
                                     )
                                 }
                             }
 
-                            is MapSelectionResult.NothingSelected -> {
-                                selectedPointId = null
-                                selectedPolygonId = null
-                                selectedPolylineId = null
-                                isPolygonEditMode = false
-                                isPolylineEditMode = false
-                                selectedVertexId = null
-                                isDraggingVertex = false
-                                captureStatus = selectionResult.status
-                            }
+                            MapSelectionCenterTarget.None -> Unit
                         }
                     }
 
@@ -1007,7 +1123,7 @@ fun MapPlaceholderScreen(
                 .padding(16.dp)
                 .verticalScroll(
                     state = screenScrollState,
-                    enabled = !isDraggingVertex
+                    enabled = !isDraggingVertex && !isDraggingPoint
                 ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -1052,7 +1168,7 @@ fun MapPlaceholderScreen(
                             ) },
                             enabled = userLatitude != null && userLongitude != null
                         ) {
-                            Text("Mi ubicaciÃ³n")
+                            Text("Mi ubicación")
                         }
 
                         Button(
@@ -1094,11 +1210,11 @@ fun MapPlaceholderScreen(
                             onClick = {
                                 isCaptureModeEnabled = true
                                 isPolygonCaptureModeEnabled = false
-                                selectedPointId = null
-                                selectedPolygonId = null
+                                mapViewModel.setSelectedPointId(null)
+                                mapViewModel.setSelectedPolygonId(null)
                                 isPolylineCaptureModeEnabled = false
-                                selectedPolylineId = null
-                                captureStatus = "Nueva captura iniciada. CategorÃ­a actual: $captureCategory. Toca el mapa para crear un punto."
+                                mapViewModel.setSelectedPolylineId(null)
+                                captureStatus = "Nueva captura iniciada. Categoría actual: $captureCategory. Toca el mapa para crear un punto."
                             },
                             colors = if (isCaptureModeEnabled && !isPolygonCaptureModeEnabled) {
                                 ButtonDefaults.buttonColors()
@@ -1120,13 +1236,13 @@ fun MapPlaceholderScreen(
                                     isCaptureModeEnabled = false
                                     isPolygonCaptureModeEnabled = true
                                     isPolylineCaptureModeEnabled = false
-                                    selectedPointId = null
-                                    selectedPolygonId = null
-                                    selectedPolylineId = null
+                                    mapViewModel.setSelectedPointId(null)
+                                    mapViewModel.setSelectedPolygonId(null)
+                                    mapViewModel.setSelectedPolylineId(null)
                                     polygonVertices = emptyList()
                                     polygonNameInput = suggestedName
                                     polygonDescriptionInput = ""
-                                    captureStatus = "Modo levantamiento de polÃ­gono activado. Toca el mapa para agregar vÃ©rtices."
+                                    captureStatus = "Modo levantamiento de polígono activado. Toca el mapa para agregar vértices."
                                 }
                             },
                             colors = if (isPolygonCaptureModeEnabled) {
@@ -1135,7 +1251,7 @@ fun MapPlaceholderScreen(
                                 ButtonDefaults.outlinedButtonColors()
                             }
                         ) {
-                            Text("Nuevo polÃ­gono")
+                            Text("Nuevo polígono")
                         }
 
                         Button(
@@ -1149,13 +1265,13 @@ fun MapPlaceholderScreen(
                                     isCaptureModeEnabled = false
                                     isPolygonCaptureModeEnabled = false
                                     isPolylineCaptureModeEnabled = true
-                                    selectedPointId = null
-                                    selectedPolygonId = null
-                                    selectedPolylineId = null
+                                    mapViewModel.setSelectedPointId(null)
+                                    mapViewModel.setSelectedPolygonId(null)
+                                    mapViewModel.setSelectedPolylineId(null)
                                     polylineVertices = emptyList()
                                     polylineNameInput = suggestedName
                                     polylineDescriptionInput = ""
-                                    captureStatus = "Modo levantamiento de lÃ­nea activado. Toca el mapa para agregar vÃ©rtices."
+                                    captureStatus = "Modo levantamiento de línea activado. Toca el mapa para agregar vértices."
                                 }
                             },
                             colors = if (isPolylineCaptureModeEnabled) {
@@ -1164,7 +1280,7 @@ fun MapPlaceholderScreen(
                                 ButtonDefaults.outlinedButtonColors()
                             }
                         ) {
-                            Text("Nueva lÃ­nea")
+                            Text("Nueva línea")
                         }
 
                         Button(
@@ -1172,12 +1288,12 @@ fun MapPlaceholderScreen(
                                 isCaptureModeEnabled = false
                                 isPolygonCaptureModeEnabled = false
                                 isPolylineCaptureModeEnabled = false
-                                selectedPolygonId = null
-                                selectedPolylineId = null
-                                isPolygonEditMode = false
-                                isPolylineEditMode = false
-                                selectedVertexId = null
-                                isDraggingVertex = false
+                                mapViewModel.setSelectedPolygonId(null)
+                                mapViewModel.setSelectedPolylineId(null)
+                                mapViewModel.setPolygonEditMode(false)
+                                mapViewModel.setPolylineEditMode(false)
+                                mapViewModel.setSelectedVertexId(null)
+                                mapViewModel.setDraggingVertex(false)
                                 polygonVertices = emptyList()
                                 polygonNameInput = ""
                                 polygonDescriptionInput = ""
@@ -1197,7 +1313,7 @@ fun MapPlaceholderScreen(
                     }
 
                     Text(
-                        text = "CategorÃ­a activa para nuevas capturas",
+                        text = "Categoría activa para nuevas capturas",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(top = 12.dp)
                     )
@@ -1216,7 +1332,7 @@ fun MapPlaceholderScreen(
                             Button(
                                 onClick = {
                                     captureCategory = category
-                                    captureStatus = "CategorÃ­a activa de captura: $category"
+                                    captureStatus = "Categoría activa de captura: $category"
                                 },
                                 colors = if (isActiveCaptureCategory) {
                                     ButtonDefaults.buttonColors(
@@ -1234,10 +1350,10 @@ fun MapPlaceholderScreen(
                     Text(
                         text = "Modo actual: ${
                             when {
-                                isPolygonCaptureModeEnabled -> "Levantamiento de polÃ­gono"
-                                isPolylineCaptureModeEnabled -> "Levantamiento de lÃ­nea"
+                                isPolygonCaptureModeEnabled -> "Levantamiento de polígono"
+                                isPolylineCaptureModeEnabled -> "Levantamiento de línea"
                                 isCaptureModeEnabled -> "Captura de puntos"
-                                else -> "SelecciÃ³n"
+                                else -> "Selección"
                             }
                         }",
                         style = MaterialTheme.typography.bodyMedium,
@@ -1245,7 +1361,7 @@ fun MapPlaceholderScreen(
                     )
 
                     Text(
-                        text = "CategorÃ­a de captura: $captureCategory",
+                        text = "Categoría de captura: $captureCategory",
                         style = MaterialTheme.typography.bodyMedium,
                         color = colorFromHex(getPointColorByCategory(captureCategory)),
                         modifier = Modifier.padding(top = 4.dp)
@@ -1261,7 +1377,7 @@ fun MapPlaceholderScreen(
                             modifier = Modifier.padding(12.dp)
                         ) {
                             Text(
-                                text = "InformaciÃ³n de ubicaciÃ³n",
+                                text = "Información de ubicación",
                                 style = MaterialTheme.typography.titleSmall
                             )
 
@@ -1277,7 +1393,7 @@ fun MapPlaceholderScreen(
                             )
 
                             Text(
-                                text = "Estado ubicaciÃ³n: $locationStatus",
+                                text = "Estado ubicación: $locationStatus",
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.padding(top = 8.dp)
                             )
@@ -1302,9 +1418,25 @@ fun MapPlaceholderScreen(
                         modifier = Modifier.padding(top = 8.dp)
                     )
 
+                    if (hasUndoAction) {
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    mapViewModel.undoLastMovement()
+                                    captureStatus = "Último movimiento deshecho."
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                        ) {
+                            Text("Deshacer último movimiento")
+                        }
+                    }
+
                     if (isPolygonCaptureModeEnabled) {
                         Text(
-                            text = "VÃ©rtices del polÃ­gono actual: ${polygonVertices.size}",
+                            text = "Vértices del polígono actual: ${polygonVertices.size}",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(top = 4.dp)
                         )
@@ -1319,14 +1451,14 @@ fun MapPlaceholderScreen(
                                 modifier = Modifier.padding(12.dp)
                             ) {
                                 Text(
-                                    text = "Datos del polÃ­gono en levantamiento",
+                                    text = "Datos del polígono en levantamiento",
                                     style = MaterialTheme.typography.titleSmall
                                 )
 
                                 OutlinedTextField(
                                     value = polygonNameInput,
                                     onValueChange = { polygonNameInput = it },
-                                    label = { Text("Nombre del polÃ­gono") },
+                                    label = { Text("Nombre del polígono") },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 8.dp),
@@ -1336,7 +1468,7 @@ fun MapPlaceholderScreen(
                                 OutlinedTextField(
                                     value = polygonDescriptionInput,
                                     onValueChange = { polygonDescriptionInput = it },
-                                    label = { Text("DescripciÃ³n del polÃ­gono") },
+                                    label = { Text("Descripción del polígono") },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 8.dp),
@@ -1346,13 +1478,13 @@ fun MapPlaceholderScreen(
                                 Button(
                                     onClick = {
                                         if (polygonVertices.size < 3) {
-                                            captureStatus = "Un polÃ­gono necesita al menos 3 vÃ©rtices."
+                                            captureStatus = "Un polígono necesita al menos 3 vértices."
                                             return@Button
                                         }
 
                                         val trimmedName = polygonNameInput.trim()
                                         if (trimmedName.isBlank()) {
-                                            captureStatus = "El nombre del polÃ­gono no puede estar vacÃ­o."
+                                            captureStatus = "El nombre del polígono no puede estar vacío."
                                             return@Button
                                         }
 
@@ -1367,12 +1499,12 @@ fun MapPlaceholderScreen(
                                                 polygonVertices = polygonVertices
                                             )
 
-                                            savedPolygons = updatedPolygons
+                                            mapViewModel.setSavedPolygons(updatedPolygons)
                                             isPolygonCaptureModeEnabled = false
                                             polygonVertices = emptyList()
                                             polygonNameInput = ""
                                             polygonDescriptionInput = ""
-                                            captureStatus = "PolÃ­gono guardado correctamente."
+                                            captureStatus = "Polígono guardado correctamente."
                                         }
                                     },
                                     modifier = Modifier
@@ -1380,21 +1512,21 @@ fun MapPlaceholderScreen(
                                         .padding(top = 12.dp),
                                     enabled = polygonVertices.size >= 3
                                 ) {
-                                    Text("Guardar polÃ­gono")
+                                    Text("Guardar polígono")
                                 }
 
                                 Button(
                                     onClick = {
                                         polygonVertices = emptyList()
                                         polygonDescriptionInput = ""
-                                        captureStatus = "Levantamiento de polÃ­gono reiniciado."
+                                        captureStatus = "Levantamiento de polígono reiniciado."
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 8.dp),
                                     colors = ButtonDefaults.outlinedButtonColors()
                                 ) {
-                                    Text("Limpiar vÃ©rtices")
+                                    Text("Limpiar vértices")
                                 }
 
                                 Button(
@@ -1403,14 +1535,14 @@ fun MapPlaceholderScreen(
                                         polygonVertices = emptyList()
                                         polygonNameInput = ""
                                         polygonDescriptionInput = ""
-                                        captureStatus = "Levantamiento de polÃ­gono cancelado."
+                                        captureStatus = "Levantamiento de polígono cancelado."
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 8.dp),
                                     colors = ButtonDefaults.outlinedButtonColors()
                                 ) {
-                                    Text("Cancelar polÃ­gono")
+                                    Text("Cancelar polígono")
                                 }
                             }
                         }
@@ -1418,7 +1550,7 @@ fun MapPlaceholderScreen(
 
                     if (isPolylineCaptureModeEnabled) {
                         Text(
-                            text = "VÃ©rtices de la lÃ­nea actual: ${polylineVertices.size}",
+                            text = "Vértices de la línea actual: ${polylineVertices.size}",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(top = 4.dp)
                         )
@@ -1433,14 +1565,14 @@ fun MapPlaceholderScreen(
                                 modifier = Modifier.padding(12.dp)
                             ) {
                                 Text(
-                                    text = "Datos de la lÃ­nea en levantamiento",
+                                    text = "Datos de la línea en levantamiento",
                                     style = MaterialTheme.typography.titleSmall
                                 )
 
                                 OutlinedTextField(
                                     value = polylineNameInput,
                                     onValueChange = { polylineNameInput = it },
-                                    label = { Text("Nombre de la lÃ­nea") },
+                                    label = { Text("Nombre de la línea") },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 8.dp),
@@ -1450,7 +1582,7 @@ fun MapPlaceholderScreen(
                                 OutlinedTextField(
                                     value = polylineDescriptionInput,
                                     onValueChange = { polylineDescriptionInput = it },
-                                    label = { Text("DescripciÃ³n de la lÃ­nea") },
+                                    label = { Text("Descripción de la línea") },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 8.dp),
@@ -1460,13 +1592,13 @@ fun MapPlaceholderScreen(
                                 Button(
                                     onClick = {
                                         if (polylineVertices.size < 2) {
-                                            captureStatus = "Una lÃ­nea necesita al menos 2 vÃ©rtices."
+                                            captureStatus = "Una línea necesita al menos 2 vértices."
                                             return@Button
                                         }
 
                                         val trimmedName = polylineNameInput.trim()
                                         if (trimmedName.isBlank()) {
-                                            captureStatus = "El nombre de la lÃ­nea no puede estar vacÃ­o."
+                                            captureStatus = "El nombre de la línea no puede estar vacío."
                                             return@Button
                                         }
 
@@ -1481,12 +1613,12 @@ fun MapPlaceholderScreen(
                                                 polylineVertices = polylineVertices
                                             )
 
-                                            savedPolylines = updatedPolylines
+                                            mapViewModel.setSavedPolylines(updatedPolylines)
                                             isPolylineCaptureModeEnabled = false
                                             polylineVertices = emptyList()
                                             polylineNameInput = ""
                                             polylineDescriptionInput = ""
-                                            captureStatus = "LÃ­nea guardada correctamente."
+                                            captureStatus = "Línea guardada correctamente."
                                         }
                                     },
                                     modifier = Modifier
@@ -1494,21 +1626,21 @@ fun MapPlaceholderScreen(
                                         .padding(top = 12.dp),
                                     enabled = polylineVertices.size >= 2
                                 ) {
-                                    Text("Guardar lÃ­nea")
+                                    Text("Guardar línea")
                                 }
 
                                 Button(
                                     onClick = {
                                         polylineVertices = emptyList()
                                         polylineDescriptionInput = ""
-                                        captureStatus = "Levantamiento de lÃ­nea reiniciado."
+                                        captureStatus = "Levantamiento de línea reiniciado."
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 8.dp),
                                     colors = ButtonDefaults.outlinedButtonColors()
                                 ) {
-                                    Text("Limpiar vÃ©rtices")
+                                    Text("Limpiar vértices")
                                 }
 
                                 Button(
@@ -1517,28 +1649,28 @@ fun MapPlaceholderScreen(
                                         polylineVertices = emptyList()
                                         polylineNameInput = ""
                                         polylineDescriptionInput = ""
-                                        captureStatus = "Levantamiento de lÃ­nea cancelado."
+                                        captureStatus = "Levantamiento de línea cancelado."
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 8.dp),
                                     colors = ButtonDefaults.outlinedButtonColors()
                                 ) {
-                                    Text("Cancelar lÃ­nea")
+                                    Text("Cancelar línea")
                                 }
                             }
                         }
                     }
 
                     Text(
-                        text = "PolÃ­gonos guardados: ${savedPolygons.size}",
+                        text = "Polígonos guardados: ${savedPolygons.size}",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(top = 12.dp)
                     )
 
                     if (savedPolygons.isEmpty()) {
                         Text(
-                            text = "TodavÃ­a no hay polÃ­gonos guardados para esta finca.",
+                            text = "Todavía no hay polígonos guardados para esta finca.",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(top = 4.dp)
                         )
@@ -1552,18 +1684,16 @@ fun MapPlaceholderScreen(
                                     .fillMaxWidth()
                                     .padding(top = 8.dp)
                                     .clickable {
-                                        if (isSelected) {
-                                            selectedPolygonId = null
-                                            captureStatus = "PolÃ­gono deseleccionado desde la lista."
+                                        val isNowSelected = handlePolygonListSelection(
+                                            mapViewModel = mapViewModel,
+                                            isSelected = isSelected,
+                                            polygonId = polygon.id
+                                        )
+
+                                        if (!isNowSelected) {
+                                            captureStatus = "Polígono deseleccionado desde la lista."
                                         } else {
-                                            selectedPolygonId = polygon.id
-                                            selectedPointId = null
-                                            selectedPolylineId = null
-                                            isPolygonEditMode = false
-                                            isPolylineEditMode = false
-                                            selectedVertexId = null
-                                            isDraggingVertex = false
-                                            captureStatus = "PolÃ­gono seleccionado: ${polygon.name}"
+                                            captureStatus = "Polígono seleccionado: ${polygon.name}"
                                             centerOnSelectedPolygon(
                                                 mapLibreMap = mapLibreMap,
                                                 vertices = vertices
@@ -1593,13 +1723,13 @@ fun MapPlaceholderScreen(
                                     )
 
                                     Text(
-                                        text = "VÃ©rtices: ${vertices.size}",
+                                        text = "Vértices: ${vertices.size}",
                                         style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.padding(top = 4.dp)
                                     )
 
                                     Text(
-                                        text = "DescripciÃ³n: ${formatPointDescription(polygon.description)}",
+                                        text = "Descripción: ${formatPointDescription(polygon.description)}",
                                         style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.padding(top = 4.dp)
                                     )
@@ -1619,7 +1749,7 @@ fun MapPlaceholderScreen(
                         val vertices = selectedPolygon.second
 
                         Text(
-                            text = "PolÃ­gono seleccionado",
+                            text = "Polígono seleccionado",
                             style = MaterialTheme.typography.titleMedium,
                             color = colorFromHex("#8E24AA"),
                             modifier = Modifier.padding(top = 16.dp)
@@ -1640,13 +1770,13 @@ fun MapPlaceholderScreen(
                                 )
 
                                 Text(
-                                    text = "DescripciÃ³n: ${formatPointDescription(polygon.description)}",
+                                    text = "Descripción: ${formatPointDescription(polygon.description)}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     modifier = Modifier.padding(top = 8.dp)
                                 )
 
                                 Text(
-                                    text = "Cantidad de vÃ©rtices: ${vertices.size}",
+                                    text = "Cantidad de vértices: ${vertices.size}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     modifier = Modifier.padding(top = 8.dp)
                                 )
@@ -1659,16 +1789,81 @@ fun MapPlaceholderScreen(
                             }
                         }
 
+                        OutlinedTextField(
+                            value = selectedPolygonNameInput,
+                            onValueChange = { selectedPolygonNameInput = it },
+                            label = { Text("Nombre del polígono") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            singleLine = true
+                        )
+
+                        OutlinedTextField(
+                            value = selectedPolygonDescriptionInput,
+                            onValueChange = { selectedPolygonDescriptionInput = it },
+                            label = { Text("Descripción") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            minLines = 2
+                        )
+
+                        OutlinedTextField(
+                            value = selectedPolygonCategoryInput,
+                            onValueChange = { selectedPolygonCategoryInput = it },
+                            label = { Text("Categoría") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            singleLine = true
+                        )
+
                         Button(
                             onClick = {
-                                isPolygonEditMode = !isPolygonEditMode
-                                selectedVertexId = null
-                                isDraggingVertex = false
+                                val trimmedName = selectedPolygonNameInput.trim()
+                                val trimmedDescription = selectedPolygonDescriptionInput.trim()
+                                val trimmedCategory = selectedPolygonCategoryInput.trim()
 
-                                captureStatus = if (isPolygonEditMode) {
-                                    "Modo ediciÃ³n activado. Toca y arrastra un vÃ©rtice, o selecciÃ³nalo para eliminarlo."
+                                if (trimmedName.isBlank()) {
+                                    captureStatus = "El nombre del polígono no puede estar vacío."
+                                    return@Button
+                                }
+
+                                if (trimmedCategory.isBlank()) {
+                                    captureStatus = "La categoría del polígono no puede estar vacía."
+                                    return@Button
+                                }
+
+                                coroutineScope.launch {
+                                    val updated = mapViewModel.updateSelectedPolygonAttributes(
+                                        name = trimmedName,
+                                        description = trimmedDescription,
+                                        category = trimmedCategory
+                                    )
+
+                                    captureStatus = if (updated) {
+                                        "Atributos del polígono actualizados."
+                                    } else {
+                                        "No se pudieron guardar los atributos del polígono."
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                        ) {
+                            Text("Guardar atributos")
+                        }
+
+                        Button(
+                            onClick = {
+                                val isEditEnabled = togglePolygonEditMode(mapViewModel)
+
+                                captureStatus = if (isEditEnabled) {
+                                    "Modo edición activado. Toca y arrastra un vértice, o selecciónalo para eliminarlo."
                                 } else {
-                                    "Modo ediciÃ³n desactivado."
+                                    "Modo edición desactivado."
                                 }
                             },
                             modifier = Modifier
@@ -1676,8 +1871,8 @@ fun MapPlaceholderScreen(
                                 .padding(top = 8.dp)
                         ) {
                             Text(
-                                if (isPolygonEditMode) "Desactivar ediciÃ³n de polÃ­gono"
-                                else "Editar polÃ­gono"
+                                if (isPolygonEditMode) "Desactivar edición de polígono"
+                                else "Editar polígono"
                             )
                         }
 
@@ -1692,7 +1887,7 @@ fun MapPlaceholderScreen(
                                 .fillMaxWidth()
                                 .padding(top = 8.dp)
                         ) {
-                            Text("Centrar polÃ­gono en mapa")
+                            Text("Centrar polígono en mapa")
                         }
 
                         Button(
@@ -1712,20 +1907,22 @@ fun MapPlaceholderScreen(
                                     ).sortedBy { it.vertexOrder }
 
                                     if (currentVertices.size <= 3) {
-                                        captureStatus = "Un polÃ­gono debe conservar al menos 3 vÃ©rtices."
+                                        captureStatus = "Un polígono debe conservar al menos 3 vértices."
                                         return@launch
                                     }
 
-                                    savedPolygons = deleteSelectedVertexFromPolygon(
-                                        db = safeDb,
-                                        farmId = farmId,
-                                        polygonId = polygonId,
-                                        vertexId = vertexId,
-                                        currentVertices = currentVertices
+                                    mapViewModel.setSavedPolygons(
+                                        deleteSelectedVertexFromPolygon(
+                                            db = safeDb,
+                                            farmId = farmId,
+                                            polygonId = polygonId,
+                                            vertexId = vertexId,
+                                            currentVertices = currentVertices
+                                        )
                                     )
 
-                                    selectedVertexId = null
-                                    captureStatus = "VÃ©rtice eliminado correctamente."
+                                    mapViewModel.setSelectedVertexId(null)
+                                    captureStatus = "Vértice eliminado correctamente."
                                 }
                             },
                             modifier = Modifier
@@ -1733,7 +1930,7 @@ fun MapPlaceholderScreen(
                                 .padding(top = 8.dp),
                             enabled = isPolygonEditMode && selectedVertexId != null
                         ) {
-                            Text("Eliminar vÃ©rtice seleccionado")
+                            Text("Eliminar vértice seleccionado")
                         }
 
                         Button(
@@ -1743,54 +1940,48 @@ fun MapPlaceholderScreen(
                                 coroutineScope.launch {
                                     val safeDb = db ?: return@launch
 
-                                    savedPolygons = deletePolygonById(
-                                        db = safeDb,
-                                        farmId = farmId,
-                                        polygonId = polygonId
+                                    mapViewModel.setSavedPolygons(
+                                        deletePolygonById(
+                                            db = safeDb,
+                                            farmId = farmId,
+                                            polygonId = polygonId
+                                        )
                                     )
 
-                                    selectedPolygonId = null
-                                    isPolygonEditMode = false
-                                    isPolylineEditMode = false
-                                    selectedVertexId = null
-                                    isDraggingVertex = false
-                                    captureStatus = "PolÃ­gono eliminado correctamente."
+                                    clearAfterPolygonDelete(mapViewModel)
+                                    captureStatus = "Polígono eliminado correctamente."
                                 }
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp)
                         ) {
-                            Text("Eliminar polÃ­gono seleccionado")
+                            Text("Eliminar polígono seleccionado")
                         }
 
                         Button(
                             onClick = {
-                                selectedPolygonId = null
-                                isPolygonEditMode = false
-                                isPolylineEditMode = false
-                                selectedVertexId = null
-                                isDraggingVertex = false
-                                captureStatus = "PolÃ­gono deseleccionado."
+                                clearAfterPolygonDeselect(mapViewModel)
+                                captureStatus = "Polígono deseleccionado."
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp),
                             colors = ButtonDefaults.outlinedButtonColors()
                         ) {
-                            Text("Deseleccionar polÃ­gono")
+                            Text("Deseleccionar polígono")
                         }
                     }
 
                     Text(
-                        text = "LÃ­neas guardadas: ${savedPolylines.size}",
+                        text = "Líneas guardadas: ${savedPolylines.size}",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(top = 12.dp)
                     )
 
                     if (savedPolylines.isEmpty()) {
                         Text(
-                            text = "TodavÃ­a no hay lÃ­neas guardadas para esta finca.",
+                            text = "Todavía no hay líneas guardadas para esta finca.",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(top = 4.dp)
                         )
@@ -1804,18 +1995,16 @@ fun MapPlaceholderScreen(
                                     .fillMaxWidth()
                                     .padding(top = 8.dp)
                                     .clickable {
-                                        if (isSelected) {
-                                            selectedPolylineId = null
-                                            captureStatus = "LÃ­nea deseleccionada desde la lista."
+                                        val isNowSelected = handlePolylineListSelection(
+                                            mapViewModel = mapViewModel,
+                                            isSelected = isSelected,
+                                            polylineId = polyline.id
+                                        )
+
+                                        if (!isNowSelected) {
+                                            captureStatus = "Línea deseleccionada desde la lista."
                                         } else {
-                                            selectedPolylineId = polyline.id
-                                            selectedPointId = null
-                                            selectedPolygonId = null
-                                            isPolygonEditMode = false
-                                            isPolylineEditMode = false
-                                            selectedVertexId = null
-                                            isDraggingVertex = false
-                                            captureStatus = "LÃ­nea seleccionada: ${polyline.name}"
+                                            captureStatus = "Línea seleccionada: ${polyline.name}"
 
                                             centerOnSelectedPolyline(
                                                 mapLibreMap = mapLibreMap,
@@ -1846,13 +2035,13 @@ fun MapPlaceholderScreen(
                                     )
 
                                     Text(
-                                        text = "VÃ©rtices: ${vertices.size}",
+                                        text = "Vértices: ${vertices.size}",
                                         style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.padding(top = 4.dp)
                                     )
 
                                     Text(
-                                        text = "DescripciÃ³n: ${formatPointDescription(polyline.description)}",
+                                        text = "Descripción: ${formatPointDescription(polyline.description)}",
                                         style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.padding(top = 4.dp)
                                     )
@@ -1872,7 +2061,7 @@ fun MapPlaceholderScreen(
                         val vertices = selectedPolyline.second
 
                         Text(
-                            text = "LÃ­nea seleccionada",
+                            text = "Línea seleccionada",
                             style = MaterialTheme.typography.titleMedium,
                             color = colorFromHex("#00897B"),
                             modifier = Modifier.padding(top = 16.dp)
@@ -1893,13 +2082,13 @@ fun MapPlaceholderScreen(
                                 )
 
                                 Text(
-                                    text = "DescripciÃ³n: ${formatPointDescription(polyline.description)}",
+                                    text = "Descripción: ${formatPointDescription(polyline.description)}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     modifier = Modifier.padding(top = 8.dp)
                                 )
 
                                 Text(
-                                    text = "Cantidad de vÃ©rtices: ${vertices.size}",
+                                    text = "Cantidad de vértices: ${vertices.size}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     modifier = Modifier.padding(top = 8.dp)
                                 )
@@ -1912,17 +2101,81 @@ fun MapPlaceholderScreen(
                             }
                         }
 
+                        OutlinedTextField(
+                            value = selectedPolylineNameInput,
+                            onValueChange = { selectedPolylineNameInput = it },
+                            label = { Text("Nombre de la línea") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            singleLine = true
+                        )
+
+                        OutlinedTextField(
+                            value = selectedPolylineDescriptionInput,
+                            onValueChange = { selectedPolylineDescriptionInput = it },
+                            label = { Text("Descripción") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            minLines = 2
+                        )
+
+                        OutlinedTextField(
+                            value = selectedPolylineCategoryInput,
+                            onValueChange = { selectedPolylineCategoryInput = it },
+                            label = { Text("Categoría") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            singleLine = true
+                        )
+
                         Button(
                             onClick = {
-                                isPolylineEditMode = !isPolylineEditMode
-                                isPolygonEditMode = false
-                                selectedVertexId = null
-                                isDraggingVertex = false
+                                val trimmedName = selectedPolylineNameInput.trim()
+                                val trimmedDescription = selectedPolylineDescriptionInput.trim()
+                                val trimmedCategory = selectedPolylineCategoryInput.trim()
 
-                                captureStatus = if (isPolylineEditMode) {
-                                    "Modo ediciÃ³n de lÃ­nea activado. Toca y arrastra un vÃ©rtice."
+                                if (trimmedName.isBlank()) {
+                                    captureStatus = "El nombre de la línea no puede estar vacío."
+                                    return@Button
+                                }
+
+                                if (trimmedCategory.isBlank()) {
+                                    captureStatus = "La categoría de la línea no puede estar vacía."
+                                    return@Button
+                                }
+
+                                coroutineScope.launch {
+                                    val updated = mapViewModel.updateSelectedPolylineAttributes(
+                                        name = trimmedName,
+                                        description = trimmedDescription,
+                                        category = trimmedCategory
+                                    )
+
+                                    captureStatus = if (updated) {
+                                        "Atributos de la línea actualizados."
+                                    } else {
+                                        "No se pudieron guardar los atributos de la línea."
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                        ) {
+                            Text("Guardar atributos")
+                        }
+
+                        Button(
+                            onClick = {
+                                val isEditEnabled = togglePolylineEditMode(mapViewModel)
+
+                                captureStatus = if (isEditEnabled) {
+                                    "Modo edición de línea activado. Toca y arrastra un vértice."
                                 } else {
-                                    "Modo ediciÃ³n de lÃ­nea desactivado."
+                                    "Modo edición de línea desactivado."
                                 }
                             },
                             modifier = Modifier
@@ -1930,8 +2183,8 @@ fun MapPlaceholderScreen(
                                 .padding(top = 8.dp)
                         ) {
                             Text(
-                                if (isPolylineEditMode) "Desactivar ediciÃ³n de lÃ­nea"
-                                else "Editar lÃ­nea"
+                                if (isPolylineEditMode) "Desactivar edición de línea"
+                                else "Editar línea"
                             )
                         }
 
@@ -1946,7 +2199,7 @@ fun MapPlaceholderScreen(
                                 .fillMaxWidth()
                                 .padding(top = 8.dp)
                         ) {
-                            Text("Centrar lÃ­nea en mapa")
+                            Text("Centrar línea en mapa")
                         }
 
                         Button(
@@ -1966,20 +2219,22 @@ fun MapPlaceholderScreen(
                                     ).sortedBy { it.vertexOrder }
 
                                     if (currentVertices.size <= 2) {
-                                        captureStatus = "Una lÃ­nea debe conservar al menos 2 vÃ©rtices."
+                                        captureStatus = "Una línea debe conservar al menos 2 vértices."
                                         return@launch
                                     }
 
-                                    savedPolylines = deleteSelectedVertexFromPolyline(
-                                        db = safeDb,
-                                        farmId = farmId,
-                                        polylineId = polylineId,
-                                        vertexId = vertexId,
-                                        currentVertices = currentVertices
+                                    mapViewModel.setSavedPolylines(
+                                        deleteSelectedVertexFromPolyline(
+                                            db = safeDb,
+                                            farmId = farmId,
+                                            polylineId = polylineId,
+                                            vertexId = vertexId,
+                                            currentVertices = currentVertices
+                                        )
                                     )
 
-                                    selectedVertexId = null
-                                    captureStatus = "VÃ©rtice de lÃ­nea eliminado correctamente."
+                                    mapViewModel.setSelectedVertexId(null)
+                                    captureStatus = "Vértice de línea eliminado correctamente."
                                 }
                             },
                             modifier = Modifier
@@ -1987,20 +2242,20 @@ fun MapPlaceholderScreen(
                                 .padding(top = 8.dp),
                             enabled = isPolylineEditMode && selectedVertexId != null
                         ) {
-                            Text("Eliminar vÃ©rtice de lÃ­nea")
+                            Text("Eliminar vértice de línea")
                         }
 
                         Button(
                             onClick = {
-                                selectedPolylineId = null
-                                captureStatus = "LÃ­nea deseleccionada."
+                                mapViewModel.setSelectedPolylineId(null)
+                                captureStatus = "Línea deseleccionada."
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp),
                             colors = ButtonDefaults.outlinedButtonColors()
                         ) {
-                            Text("Deseleccionar lÃ­nea")
+                            Text("Deseleccionar línea")
                         }
 
                         Button(
@@ -2010,21 +2265,23 @@ fun MapPlaceholderScreen(
                                 coroutineScope.launch {
                                     val safeDb = db ?: return@launch
 
-                                    savedPolylines = deletePolylineById(
-                                        db = safeDb,
-                                        farmId = farmId,
-                                        polylineId = polylineId
+                                    mapViewModel.setSavedPolylines(
+                                        deletePolylineById(
+                                            db = safeDb,
+                                            farmId = farmId,
+                                            polylineId = polylineId
+                                        )
                                     )
 
-                                    selectedPolylineId = null
-                                    captureStatus = "LÃ­nea eliminada correctamente."
+                                    mapViewModel.setSelectedPolylineId(null)
+                                    captureStatus = "Línea eliminada correctamente."
                                 }
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp)
                         ) {
-                            Text("Eliminar lÃ­nea seleccionada")
+                            Text("Eliminar línea seleccionada")
                         }
                     }
 
@@ -2036,7 +2293,7 @@ fun MapPlaceholderScreen(
 
                     if (capturedPoints.isEmpty()) {
                         Text(
-                            text = "TodavÃ­a no hay puntos guardados para esta finca.",
+                            text = "Todavía no hay puntos guardados para esta finca.",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(top = 4.dp)
                         )
@@ -2051,17 +2308,15 @@ fun MapPlaceholderScreen(
                                     .fillMaxWidth()
                                     .padding(top = 8.dp)
                                     .clickable {
-                                        if (isSelected) {
-                                            selectedPointId = null
+                                        val isNowSelected = handlePointListSelection(
+                                            mapViewModel = mapViewModel,
+                                            isSelected = isSelected,
+                                            pointId = point.id
+                                        )
+
+                                        if (!isNowSelected) {
                                             captureStatus = "Punto deseleccionado desde la lista."
                                         } else {
-                                            selectedPointId = point.id
-                                            selectedPolygonId = null
-                                            selectedPolylineId = null
-                                            isPolygonEditMode = false
-                                            isPolylineEditMode = false
-                                            selectedVertexId = null
-                                            isDraggingVertex = false
                                             captureStatus = "Punto seleccionado desde la lista: ${point.name}"
                                             centerOnSelectedPoint(
                                                 mapLibreMap = mapLibreMap,
@@ -2092,7 +2347,7 @@ fun MapPlaceholderScreen(
                                     )
 
                                     Text(
-                                        text = "CategorÃ­a: ${point.category}",
+                                        text = "Categoría: ${point.category}",
                                         style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.padding(top = 4.dp),
                                         color = categoryColor
@@ -2110,7 +2365,7 @@ fun MapPlaceholderScreen(
                                     )
 
                                     Text(
-                                        text = "DescripciÃ³n: ${formatPointDescription(point.description)}",
+                                        text = "Descripción: ${formatPointDescription(point.description)}",
                                         style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.padding(top = 4.dp)
                                     )
@@ -2144,7 +2399,7 @@ fun MapPlaceholderScreen(
                                 modifier = Modifier.padding(12.dp)
                             ) {
                                 Text(
-                                    text = "CategorÃ­a activa",
+                                    text = "Categoría activa",
                                     style = MaterialTheme.typography.bodySmall
                                 )
 
@@ -2211,6 +2466,25 @@ fun MapPlaceholderScreen(
                             Text("Copiar coordenadas")
                         }
 
+                        Button(
+                            onClick = {
+                                val isEditEnabled = togglePointEditMode(mapViewModel)
+                                captureStatus = if (isEditEnabled) {
+                                    "Modo edición de punto activado. Toca y arrastra el punto seleccionado."
+                                } else {
+                                    "Modo edición de punto desactivado."
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                        ) {
+                            Text(
+                                if (isPointEditMode) "Desactivar edición de punto"
+                                else "Editar punto"
+                            )
+                        }
+
                         OutlinedTextField(
                             value = pointNameInput,
                             onValueChange = { pointNameInput = it },
@@ -2224,7 +2498,7 @@ fun MapPlaceholderScreen(
                         OutlinedTextField(
                             value = pointDescriptionInput,
                             onValueChange = { pointDescriptionInput = it },
-                            label = { Text("DescripciÃ³n") },
+                            label = { Text("Descripción") },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp),
@@ -2232,7 +2506,7 @@ fun MapPlaceholderScreen(
                         )
 
                         Text(
-                            text = "CategorÃ­a del punto",
+                            text = "Categoría del punto",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(top = 12.dp)
                         )
@@ -2266,7 +2540,7 @@ fun MapPlaceholderScreen(
                                                     existingPoints = capturedPoints,
                                                     currentPointId = selectedPoint.id
                                                 )
-                                                captureStatus = "Nombre sugerido actualizado segÃºn la categorÃ­a."
+                                                captureStatus = "Nombre sugerido actualizado según la categoría."
                                             }
                                         }
                                     },
@@ -2284,35 +2558,32 @@ fun MapPlaceholderScreen(
                         }
                         Button(
                             onClick = {
-                                val pointId = selectedPoint.id
                                 val trimmedName = pointNameInput.trim()
                                 val trimmedDescription = pointDescriptionInput.trim()
                                 val trimmedCategory = pointCategoryInput.trim()
 
                                 if (trimmedName.isBlank()) {
-                                    captureStatus = "El nombre del punto no puede estar vacÃ­o."
+                                    captureStatus = "El nombre del punto no puede estar vacío."
                                     return@Button
                                 }
 
                                 if (trimmedCategory.isBlank()) {
-                                    captureStatus = "La categorÃ­a del punto no puede estar vacÃ­a."
+                                    captureStatus = "La categoría del punto no puede estar vacía."
                                     return@Button
                                 }
 
                                 coroutineScope.launch {
-                                    val safeDb = db ?: return@launch
-
-                                    val updatedPoints = updatePointAttributes(
-                                        db = safeDb,
-                                        farmId = farmId,
-                                        pointId = pointId,
+                                    val updated = mapViewModel.updateSelectedPointAttributes(
                                         name = trimmedName,
                                         description = trimmedDescription,
                                         category = trimmedCategory
                                     )
 
-                                    capturedPoints = updatedPoints
-                                    captureStatus = "Atributos del punto actualizados."
+                                    captureStatus = if (updated) {
+                                        "Atributos del punto actualizados."
+                                    } else {
+                                        "No se pudieron guardar los atributos del punto."
+                                    }
                                 }
                             },
                             modifier = Modifier
@@ -2324,7 +2595,7 @@ fun MapPlaceholderScreen(
 
                         Button(
                             onClick = {
-                                selectedPointId = null
+                                mapViewModel.clearPointSelection()
                                 captureStatus = "Punto deseleccionado."
                             },
                             modifier = Modifier
@@ -2348,8 +2619,8 @@ fun MapPlaceholderScreen(
                                         pointId = pointId
                                     )
 
-                                    capturedPoints = updatedPoints
-                                    selectedPointId = null
+                                    mapViewModel.setCapturedPoints(updatedPoints)
+                                    mapViewModel.clearPointSelection()
                                     captureStatus = "Punto eliminado"
                                 }
                             },
@@ -2385,10 +2656,11 @@ private fun hasLocationPermission(context: Context): Boolean {
 fun MapPlaceholderScreenPreview() {
     FincagisTheme {
         MapPlaceholderScreen(
-            farmName = "Finca San JosÃ©",
+            farmName = "Finca San José",
             latitude = -4.036,
             longitude = -79.201,
             onBackClick = {}
         )
     }
 }
+

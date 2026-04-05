@@ -25,6 +25,20 @@ interface PolylineDao {
     @Query("DELETE FROM polyline_vertices WHERE polylineId = :polylineId")
     suspend fun deleteVerticesByPolylineId(polylineId: String)
 
+    @Query("""
+        UPDATE polylines
+        SET name = :name,
+            description = :description,
+            category = :category
+        WHERE id = :polylineId
+    """)
+    suspend fun updatePolylineAttributes(
+        polylineId: String,
+        name: String,
+        description: String?,
+        category: String
+    )
+
     @Query("DELETE FROM polylines WHERE id = :polylineId")
     suspend fun deletePolylineById(polylineId: String)
 }

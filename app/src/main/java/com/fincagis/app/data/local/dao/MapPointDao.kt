@@ -32,6 +32,18 @@ interface MapPointDao {
         category: String
     )
 
+    @Query("""
+        UPDATE map_points
+        SET latitude = :latitude,
+            longitude = :longitude
+        WHERE id = :pointId
+    """)
+    suspend fun updatePointPosition(
+        pointId: String,
+        latitude: Double,
+        longitude: Double
+    )
+
     @Query("DELETE FROM map_points WHERE id = :pointId")
     suspend fun deleteById(pointId: String)
 

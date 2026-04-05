@@ -1,9 +1,22 @@
 package com.fincagis.app.data.local.entity
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "polyline_vertices")
+@Entity(
+    tableName = "polyline_vertices",
+    foreignKeys = [
+        ForeignKey(
+            entity = PolylineEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["polylineId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index(value = ["polylineId"])]
+)
 data class PolylineVertexEntity(
     @PrimaryKey
     val id: String,

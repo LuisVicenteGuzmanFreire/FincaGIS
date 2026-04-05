@@ -4,27 +4,11 @@ import com.fincagis.app.core.database.AppDatabase
 import com.fincagis.app.data.local.entity.MapPointEntity
 import com.fincagis.app.data.local.entity.PolygonEntity
 import com.fincagis.app.data.local.entity.PolygonVertexEntity
+import com.fincagis.app.data.local.entity.PolylineEntity
+import com.fincagis.app.data.local.entity.PolylineVertexEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.maplibre.android.geometry.LatLng
-import com.fincagis.app.data.local.entity.PolylineEntity
-import com.fincagis.app.data.local.entity.PolylineVertexEntity
-
-suspend fun loadMapData(
-    db: AppDatabase,
-    farmId: String
-): Pair<List<MapPointEntity>, List<Pair<PolygonEntity, List<PolygonVertexEntity>>>> {
-    return withContext(Dispatchers.IO) {
-        val points = db.mapPointDao().getPointsByFarmId(farmId)
-
-        val polygons = db.polygonDao().getPolygonsByFarmId(farmId).map { polygon ->
-            val vertices = db.polygonDao().getVerticesByPolygonId(polygon.id)
-            polygon to vertices
-        }
-
-        points to polygons
-    }
-}
 
 fun getVerticesOfSelectedPolygon(
     savedPolygons: List<Pair<PolygonEntity, List<PolygonVertexEntity>>>,
@@ -125,6 +109,7 @@ suspend fun savePolygon(
                 farmId = farmId,
                 name = polygonName,
                 description = polygonDescription.ifBlank { null },
+                category = "General",
                 createdAt = createdAt
             )
         )
@@ -167,6 +152,23 @@ suspend fun updatePointAttributes(
     }
 }
 
+suspend fun updatePointPosition(
+    db: AppDatabase,
+    farmId: String,
+    pointId: String,
+    latitude: Double,
+    longitude: Double
+): List<MapPointEntity> {
+    return withContext(Dispatchers.IO) {
+        db.mapPointDao().updatePointPosition(
+            pointId = pointId,
+            latitude = latitude,
+            longitude = longitude
+        )
+        db.mapPointDao().getPointsByFarmId(farmId)
+    }
+}
+
 suspend fun deletePointById(
     db: AppDatabase,
     farmId: String,
@@ -184,7 +186,6 @@ suspend fun deletePolygonById(
     polygonId: String
 ): List<Pair<PolygonEntity, List<PolygonVertexEntity>>> {
     return withContext(Dispatchers.IO) {
-        db.polygonDao().deleteVerticesByPolygonId(polygonId)
         db.polygonDao().deletePolygonById(polygonId)
 
         db.polygonDao().getPolygonsByFarmId(farmId).map { polygon ->
@@ -194,14 +195,25 @@ suspend fun deletePolygonById(
     }
 }
 
-suspend fun loadPolylineData(
+suspend fun updatePolygonAttributes(
     db: AppDatabase,
-    farmId: String
-): List<Pair<PolylineEntity, List<PolylineVertexEntity>>> {
+    farmId: String,
+    polygonId: String,
+    name: String,
+    description: String,
+    category: String
+): List<Pair<PolygonEntity, List<PolygonVertexEntity>>> {
     return withContext(Dispatchers.IO) {
-        db.polylineDao().getPolylinesByFarmId(farmId).map { polyline ->
-            val vertices = db.polylineDao().getVerticesByPolylineId(polyline.id)
-            polyline to vertices
+        db.polygonDao().updatePolygonAttributes(
+            polygonId = polygonId,
+            name = name,
+            description = description.ifBlank { null },
+            category = category
+        )
+
+        db.polygonDao().getPolygonsByFarmId(farmId).map { polygon ->
+            val vertices = db.polygonDao().getVerticesByPolygonId(polygon.id)
+            polygon to vertices
         }
     }
 }
@@ -223,6 +235,7 @@ suspend fun savePolyline(
                 farmId = farmId,
                 name = polylineName,
                 description = polylineDescription.ifBlank { null },
+                category = "General",
                 createdAt = createdAt
             )
         )
@@ -252,8 +265,30 @@ suspend fun deletePolylineById(
     polylineId: String
 ): List<Pair<PolylineEntity, List<PolylineVertexEntity>>> {
     return withContext(Dispatchers.IO) {
-        db.polylineDao().deleteVerticesByPolylineId(polylineId)
         db.polylineDao().deletePolylineById(polylineId)
+
+        db.polylineDao().getPolylinesByFarmId(farmId).map { polyline ->
+            val vertices = db.polylineDao().getVerticesByPolylineId(polyline.id)
+            polyline to vertices
+        }
+    }
+}
+
+suspend fun updatePolylineAttributes(
+    db: AppDatabase,
+    farmId: String,
+    polylineId: String,
+    name: String,
+    description: String,
+    category: String
+): List<Pair<PolylineEntity, List<PolylineVertexEntity>>> {
+    return withContext(Dispatchers.IO) {
+        db.polylineDao().updatePolylineAttributes(
+            polylineId = polylineId,
+            name = name,
+            description = description.ifBlank { null },
+            category = category
+        )
 
         db.polylineDao().getPolylinesByFarmId(farmId).map { polyline ->
             val vertices = db.polylineDao().getVerticesByPolylineId(polyline.id)
@@ -307,3 +342,4 @@ suspend fun deleteSelectedVertexFromPolyline(
 
     return loadPolylineData(db, farmId)
 }
+

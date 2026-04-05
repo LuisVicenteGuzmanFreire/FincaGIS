@@ -1,4 +1,4 @@
-﻿package com.fincagis.app.presentation.main.map
+package com.fincagis.app.presentation.main.map
 
 import com.fincagis.app.data.local.entity.MapPointEntity
 import com.fincagis.app.data.local.entity.PolygonEntity
@@ -86,7 +86,7 @@ fun resolveMapSelection(
             MapSelectionResult.PolylineSelected(
                 polyline = tappedPolyline,
                 vertices = vertices,
-                status = "LÃ­nea seleccionada desde el mapa: ${tappedPolyline.name}"
+                status = "Línea seleccionada desde el mapa: ${tappedPolyline.name}"
             )
         }
 
@@ -99,7 +99,7 @@ fun resolveMapSelection(
             MapSelectionResult.PolygonSelected(
                 polygon = tappedPolygon,
                 vertices = vertices,
-                status = "PolÃ­gono seleccionado desde el mapa: ${tappedPolygon.name}"
+                status = "Polígono seleccionado desde el mapa: ${tappedPolygon.name}"
             )
         }
 

@@ -25,6 +25,20 @@ interface PolygonDao {
     @Query("DELETE FROM polygon_vertices WHERE polygonId = :polygonId")
     suspend fun deleteVerticesByPolygonId(polygonId: String)
 
+    @Query("""
+        UPDATE polygons
+        SET name = :name,
+            description = :description,
+            category = :category
+        WHERE id = :polygonId
+    """)
+    suspend fun updatePolygonAttributes(
+        polygonId: String,
+        name: String,
+        description: String?,
+        category: String
+    )
+
     @Query("DELETE FROM polygons WHERE id = :polygonId")
     suspend fun deletePolygonById(polygonId: String)
 
